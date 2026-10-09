@@ -125,7 +125,7 @@
         },
         "data_description": {
           "url": "For example http://192.168.1.20:32400.",
-          "token": "Your Plex token (X-Plex-Token). Leave empty to keep the saved token.",
+          "token": "Your Plex token (X-Plex-Token). Leave empty to keep the saved token for the same server address.",
           "player": "Optional. Only follow players whose name contains this text, for example Samsung.",
           "prefill": "Copies the server URL and token from the Plex integration already set up in Home Assistant. Only used when ticked."
         }
@@ -139,7 +139,7 @@
         },
         "data_description": {
           "url": "For example http://192.168.1.20:8096.",
-          "api_key": "Create one in the Jellyfin dashboard under API Keys. Leave empty to keep the saved key."
+          "api_key": "Create one in the Jellyfin dashboard under API Keys. Leave empty to keep the saved key for the same server address."
         }
       },
       "jellyfin_user": {
@@ -194,9 +194,9 @@
         "data_description": {
           "host": "Host name or IP address of the media PC.",
           "ambient_port": "Usually 8097.",
-          "ambient_token": "Bearer token of the ambient player. Leave empty to keep the saved token.",
+          "ambient_token": "Bearer token of the ambient player. Leave empty to keep the saved token for the same host and port.",
           "coord_port": "Usually 8098.",
-          "coord_token": "Bearer token of the media hub coordinator. Leave empty to keep the saved token.",
+          "coord_token": "Bearer token of the media hub coordinator. Leave empty to keep the saved token for the same host and port.",
           "clients": "App names the coordinator can open, for example jellyfin. Lowercase letters, digits and underscores."
         },
         "sections": {
@@ -223,7 +223,7 @@
         },
         "data_description": {
           "host": "Host name or IP address of the ESP32 keyboard bridge.",
-          "key": "The shared key set in the bridge firmware. Leave empty to keep the saved key."
+          "key": "The shared key set in the bridge firmware. Leave empty to keep the saved key for the same host."
         }
       },
       "ambience": {
@@ -357,7 +357,7 @@
         },
         "data_description": {
           "url": "Address of your Ollama server.",
-          "api_key": "Stored in Home Assistant and only sent to the provider. Leave empty to keep the saved key."
+          "api_key": "Stored in Home Assistant and only sent to the provider. Leave empty to keep the saved key for this provider."
         }
       },
       "assistant_model": {
@@ -382,7 +382,7 @@
       "mode_exists": "A mode with this name already exists.",
       "invalid_name": "Enter a name. A new mode cannot be called Off.",
       "invalid_client": "App names use lowercase letters, digits and underscores only, for example jellyfin or prime_video.",
-      "api_key_required": "Enter the API key."
+      "secret_required": "Enter this token or key. A saved one is only reused while the address and port (or the assistant provider) stay the same."
     }
   },
   "selector": {
