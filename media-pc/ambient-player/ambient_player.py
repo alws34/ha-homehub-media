@@ -5,8 +5,8 @@ The service owns two independent MPV processes:
   * video: fullscreen visual plus its original audio
   * soundtrack: audio-only, independently looped/seeked/levelled
 
-The v2 API is a catalog plus a player: composition playback, per-layer
-lifecycle, partial live updates that never restart an unmentioned layer, and
+The v2 API is a catalog plus a player: composition playback, partial live
+per-layer updates (PATCH /v2/state) that never restart an unmentioned layer, and
 configured live radio streams in the dynamic soundtrack catalog. Profiles and
 favourites live in Home Assistant. Every request must come from the IP
 allowlist, name a configured Host and carry the bearer token; bodies are JSON.
@@ -635,12 +635,9 @@ class DualAmbientPlayer:
         self._release_layer_locked(layer)
         return True
 
-    def stop(self, kind: str | None = None) -> dict[str, Any]:
+    def stop(self) -> dict[str, Any]:
         with self.lock:
-            if kind is not None and kind not in self.layers:
-                raise PlayerError("unknown playback layer")
-            targets = [self.layers[kind]] if kind else list(self.layers.values())
-            stopped = {layer.name: self._stop_layer_locked(layer) for layer in targets}
+            stopped = {layer.name: self._stop_layer_locked(layer) for layer in self.layers.values()}
             self.last_error = None
             result = self.status()
             result["stopped"] = stopped
@@ -1035,22 +1032,6 @@ class DualAmbientPlayer:
                 self.last_error = getattr(exc, "code", "unavailable")  # never a path/message
                 raise
 
-    def pause(self, paused: bool, kind: str | None = None) -> dict[str, Any]:
-        with self.lock:
-            if kind is not None and kind not in self.layers:
-                raise PlayerError("unknown playback layer")
-            targets = [self.layers[kind]] if kind else list(self.layers.values())
-            active = 0
-            for layer in targets:
-                self._refresh_layer(layer)
-                if layer.process is not None:
-                    self._ipc(layer, ["set_property", "pause", paused])
-                    layer.paused = paused
-                    active += 1
-            if active == 0:
-                raise PlayerError("no requested playback layer is active", "unavailable")
-            return self.status()
-
     def shutdown(self) -> None:
         with self.lock:
             self.stop()
@@ -1215,26 +1196,10 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             if path == "/v2/stop":
                 result = self.server.player.stop()
-            elif path == "/v2/pause":
-                result = self.server.player.pause(True)
-            elif path == "/v2/resume":
-                result = self.server.player.pause(False)
             elif path == "/v2/play":
                 result = self.server.player.play(body)
             elif path == "/v2/catalog/refresh":
                 result = self.server.player.refresh_catalog()
-            elif path == "/v2/video/stop":
-                result = self.server.player.stop("video")
-            elif path == "/v2/soundtrack/stop":
-                result = self.server.player.stop("soundtrack")
-            elif path == "/v2/video/pause":
-                result = self.server.player.pause(True, "video")
-            elif path == "/v2/video/resume":
-                result = self.server.player.pause(False, "video")
-            elif path == "/v2/soundtrack/pause":
-                result = self.server.player.pause(True, "soundtrack")
-            elif path == "/v2/soundtrack/resume":
-                result = self.server.player.pause(False, "soundtrack")
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
                 return
