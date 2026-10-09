@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Mapping
 from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
 
 import voluptuous as vol
 from homeassistant.config_entries import (
+    SOURCE_REAUTH,
     SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigFlow,
@@ -249,8 +250,17 @@ class HomeHubConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id=step_id, errors=errors,
                                     data_schema=self.add_suggested_values_to_schema(HOST_SCHEMA, user_input or defaults))
 
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """The TV rejected the token (the hub starts this): pair again, keep everything else."""
+        self._data = {CONF_HOST: entry_data[CONF_HOST], CONF_MAC: entry_data.get(CONF_MAC)}
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict | None = None) -> ConfigFlowResult:
+        return await self.async_step_pair(user_input)
+
     async def async_step_pair(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        reauth = self.source == SOURCE_REAUTH
         if user_input is not None:
             tv = SamsungTV(self.hass, self._data[CONF_HOST], token=None, mac=self._data[CONF_MAC])
             try:
@@ -260,6 +270,9 @@ class HomeHubConfigFlow(ConfigFlow, domain=DOMAIN):
             except HomeAssistantError:
                 errors["base"] = "cannot_connect"
             else:
+                if reauth:
+                    return self.async_update_reload_and_abort(self._get_reauth_entry(),
+                                                              data_updates={CONF_TOKEN: token})
                 data = {**self._data, CONF_TOKEN: token, CONF_PORT: 8002}
                 if self.source == SOURCE_RECONFIGURE:
                     return self.async_update_reload_and_abort(self._get_reconfigure_entry(), data=data)
@@ -268,7 +281,7 @@ class HomeHubConfigFlow(ConfigFlow, domain=DOMAIN):
                     OPT_VOLUME: DEFAULT_VOLUME, OPT_DAYPARTS: DEFAULT_DAYPARTS}))
             finally:
                 await tv.close()
-        return self.async_show_form(step_id="pair", errors=errors,
+        return self.async_show_form(step_id="reauth_confirm" if reauth else "pair", errors=errors,
                                     description_placeholders={"host": self._data[CONF_HOST]})
 
 
@@ -331,11 +344,13 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
             data = self.config_entry.data
             tv = SamsungTV(self.hass, data[CONF_HOST], token=data.get(CONF_TOKEN), mac=data.get(CONF_MAC))
             try:
-                found = await tv.discover_apps()
+                if not (found := await tv.discover_apps()):  # standby: an empty result would stop auto-discovery
+                    raise HomeAssistantError
             except HomeAssistantError:
                 errors["base"], values = "cannot_connect", user_input
-            else:
-                values = {"enabled": list(found), "overrides": _join(found, ", ")}
+            else:  # ids stay the user's overrides; discovered apps go to their own key (the hub merges both)
+                self._options[OPT_APPS] = {**apps, "discovered": found}
+                values = {"enabled": list(found), "overrides": user_input.get("overrides")}
             finally:
                 await tv.close()
         elif user_input is not None:
@@ -346,7 +361,7 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
             except ValueError:
                 errors["overrides"], values = "invalid_id", user_input
             else:
-                return self._set(OPT_APPS, {"enabled": user_input.get("enabled", []), "ids": ids})
+                return self._set(OPT_APPS, {**apps, "enabled": user_input.get("enabled", []), "ids": ids})
         return self._form("apps", APPS_SCHEMA, values, errors)
 
     async def async_step_servers(self, user_input: dict | None = None) -> ConfigFlowResult:
