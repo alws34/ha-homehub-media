@@ -36,7 +36,7 @@ class _PCClient:
                         except (ValueError, KeyError, TypeError):
                             pass
                     raise PCError(msg)
-                return await resp.json(content_type=None)
+                return await resp.json(content_type=None) or {}
         except (aiohttp.ClientError, TimeoutError) as err:
             raise PCError("Media PC is unreachable") from err
         except ValueError as err:  # 2xx with a non-JSON body: not one of our daemons
