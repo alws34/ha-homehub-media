@@ -1,5 +1,6 @@
 import http.client
 import json
+import socket
 import sys
 import tempfile
 import threading
@@ -82,8 +83,19 @@ class AuthTest(unittest.TestCase):
         self.assertEqual(self.req("POST", "/v1/play/rain"), 404)
 
     def test_short_token_rejected(self):
-        with self.assertRaises(ap.PlayerError):
-            config(Path(self.tmp.name), auth_token="short")
+        for token in ("short", "t" * 20 + " " + "t" * 20):
+            with self.assertRaises(ap.PlayerError):
+                config(Path(self.tmp.name), auth_token=token)
+
+    def test_unlisted_peers_cannot_starve_allowlisted_clients(self):
+        pairs = [socket.socketpair() for _ in range(ap.MAX_CONNECTIONS)]
+        try:
+            for server_end, _ in pairs:  # idle connections from a non-allowlisted LAN host
+                self.srv.process_request(server_end, ("192.0.2.66", 40000))
+            self.assertEqual(self.req("GET", "/v2/status"), 200)
+        finally:
+            for _, client_end in pairs:
+                client_end.close()
 
     def test_ip_not_allowed_403_before_token(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,6 +119,23 @@ class StateTest(unittest.TestCase):
             ap.PersistentState(path)
             self.assertEqual(json.loads(path.read_text()), {"version": 3, "catalog": catalog})
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_corrupt_state_is_set_aside(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text("{not json")
+            ap.PersistentState(path)
+            self.assertEqual(json.loads(path.read_text())["version"], 3)
+            self.assertEqual((Path(tmp) / "state.json.corrupt").read_text(), "{not json")
+
+    def test_stream_id_wins_over_colliding_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = config(Path(tmp), soundtrack_streams={"radio_x": "https://radio.example/x"})
+            (Path(tmp) / "soundtracks" / "radio_x.mp3").write_bytes(b"audio")
+            with mock.patch.object(ap.Catalog, "_probe", return_value=(10.0, True)):
+                catalog = ap.Catalog(cfg, ap.PersistentState(Path(cfg["state_file"])))
+            items = catalog.items["soundtrack"]
+            self.assertEqual((items["radio_x"].source_type, items["radio_x_2"].source_type), ("stream", "file"))
 
     def test_unprobeable_file_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:

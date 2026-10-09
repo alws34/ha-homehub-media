@@ -12,11 +12,13 @@
     },
     "sonarr": {
       "unit": "sonarr-browser.service",
-      "home_url": "http://127.0.0.1:8989/"
+      "home_url": "http://127.0.0.1:8989/",
+      "tab_navigation": true
     },
     "radarr": {
       "unit": "radarr-browser.service",
-      "home_url": "http://127.0.0.1:7878/"
+      "home_url": "http://127.0.0.1:7878/",
+      "tab_navigation": true
     }
   }
 }

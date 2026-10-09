@@ -46,8 +46,9 @@ VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov"}
 SOUNDTRACK_EXTENSIONS = {".mp3", ".ogg", ".opus", ".flac", ".m4a", ".wav"}
 DEFAULT_PORT = 8097
 MAX_REQUEST_BYTES = 65536
-MAX_CONNECTIONS = 16
-MIN_TOKEN_LENGTH = 32
+MAX_CONNECTIONS = 16  # for allowlisted peers
+MAX_UNLISTED_CONNECTIONS = 2  # everyone else: enough for their 403, too few to starve Home Assistant
+TOKEN_RE = re.compile(r"[\x21-\x7e]{32,}")
 
 
 class PlayerError(RuntimeError):
@@ -174,17 +175,27 @@ class Layer:
 
 
 class PersistentState:
-    """Only the catalog id cache (stable ids across rescans). v2 profiles/favourites are dropped."""
+    """Only the catalog id cache (stable ids across rescans). v2 profiles/favourites are dropped.
+
+    The cache is disposable: an unusable file is set aside as <name>.corrupt and the service starts fresh.
+    """
 
     def __init__(self, path: Path):
         self.path = path
         self.data: dict[str, Any] = {"version": 3, "catalog": {"video": {}, "soundtrack": {}}}
         if path.exists():
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, dict) or loaded.get("version") not in (2, 3):
-                raise PlayerError("unsupported or invalid persistent state")
-            for kind in ("video", "soundtrack"):
-                self.data["catalog"][kind].update(loaded.get("catalog", {}).get(kind, {}))
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                catalog = {kind: dict(loaded.get("catalog", {}).get(kind, {})) for kind in ("video", "soundtrack")}
+                if loaded.get("version") not in (2, 3) or not all(
+                    isinstance(record, dict) for records in catalog.values() for record in records.values()
+                ):
+                    raise ValueError("unsupported version or catalog shape")
+                self.data["catalog"] = catalog
+            except (ValueError, TypeError, AttributeError) as exc:  # JSONDecodeError is a ValueError
+                corrupt = path.with_name(path.name + ".corrupt")
+                LOGGER.warning("State file unusable (%s); moved to %s, starting fresh", exc, corrupt)
+                path.replace(corrupt)
         self.save()
 
     def save(self) -> None:
@@ -296,7 +307,8 @@ class Catalog:
         skipped = 0
         for kind, root in self.roots.items():
             extensions = VIDEO_EXTENSIONS if kind == "video" else SOUNDTRACK_EXTENSIONS
-            used: set[str] = set()
+            # Stream ids are claimed first, so a colliding file is renamed or skipped, never the stream.
+            used: set[str] = set(self.soundtrack_streams) if kind == "soundtrack" else set()
             for path in sorted(root.rglob("*"), key=lambda item: str(item).lower()):
                 if not path.is_file() or path.suffix.lower() not in extensions:
                     continue
@@ -336,8 +348,6 @@ class Catalog:
                 used.add(media_id)
             if kind == "soundtrack":
                 for media_id, stream_url in sorted(self.soundtrack_streams.items()):
-                    if media_id in used:
-                        raise PlayerError(f"duplicate soundtrack id: {media_id}")
                     label = media_id.replace("_", " ").strip()
                     if label.startswith("radio "):
                         label = f"{label[6:]} live"
@@ -360,7 +370,6 @@ class Catalog:
                         "fingerprint": fingerprint,
                         "source_type": "stream",
                     }
-                    used.add(media_id)
         self.items = refreshed
         self.skipped = skipped
         self.state.data["catalog"] = records
@@ -1048,7 +1057,11 @@ class DualAmbientPlayer:
 
 
 class AmbientHTTPServer(ThreadingHTTPServer):
-    """Threaded server with at most MAX_CONNECTIONS live connections; extras are closed unanswered."""
+    """Threaded server with per-peer-class connection pools; connections beyond a pool are closed unanswered.
+
+    The pool is chosen by source IP before any byte is read, so non-allowlisted hosts dripping slow
+    requests can only exhaust their own MAX_UNLISTED_CONNECTIONS, never Home Assistant's slots.
+    """
 
     daemon_threads = True
     allow_reuse_address = True
@@ -1057,16 +1070,25 @@ class AmbientHTTPServer(ThreadingHTTPServer):
     allowed_hosts: frozenset[str]
     auth_token: str
     slots: threading.BoundedSemaphore
+    unlisted_slots: threading.BoundedSemaphore
+    held: dict  # request socket -> the pool it took a slot from
+
+    def client_allowed(self, host: str) -> bool:
+        return host in self.allowed_clients
 
     def process_request(self, request, client_address) -> None:
-        if not self.slots.acquire(blocking=False):
+        pool = self.slots if self.client_allowed(client_address[0]) else self.unlisted_slots
+        if not pool.acquire(blocking=False):
             self.close_request(request)
             return
+        self.held[request] = pool
         super().process_request(request, client_address)
 
     def shutdown_request(self, request) -> None:
         super().shutdown_request(request)
-        self.slots.release()
+        pool = self.held.pop(request, None)
+        if pool is not None:
+            pool.release()
 
 
 def default_hosts(host: str, port: int) -> frozenset[str]:
@@ -1083,6 +1105,8 @@ def make_server(config: dict[str, Any]) -> AmbientHTTPServer:
     server.allowed_clients = frozenset(config["allowed_clients"])
     server.auth_token = config["auth_token"]
     server.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+    server.unlisted_slots = threading.BoundedSemaphore(MAX_UNLISTED_CONNECTIONS)
+    server.held = {}
     server.allowed_hosts = frozenset(config["allowed_hosts"]) or default_hosts(
         config["bind_host"], server.server_port
     )
@@ -1107,20 +1131,26 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _rejection(self) -> tuple[HTTPStatus, str] | None:
-        """Guard order is part of the API: IP 403, Host 421, bearer token 401, JSON body 415."""
-        if self.client_address[0] not in self.server.allowed_clients:
+        """Guard order is part of the API: IP 403, Host 421, token 401, framing 411/400, JSON body 415."""
+        chunked = "Transfer-Encoding" in self.headers
+        length = (self.headers.get("Content-Length") or "0").strip()
+        if chunked or (self.command == "GET" and length != "0"):
+            self.close_connection = True  # an unread body must never be parsed as the next request
+        if not self.server.client_allowed(self.client_address[0]):
             return HTTPStatus.FORBIDDEN, "forbidden"
         if (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
             return HTTPStatus.MISDIRECTED_REQUEST, "host_not_allowed"
         presented = (self.headers.get("Authorization") or "").encode()
         if not hmac.compare_digest(presented, f"Bearer {self.server.auth_token}".encode()):
             return HTTPStatus.UNAUTHORIZED, "unauthorized"
-        if (
-            self.command in ("POST", "PUT", "PATCH")
-            and self.headers.get("Content-Length", "0") != "0"
-            and not (self.headers.get("Content-Type") or "").lower().startswith("application/json")
-        ):
-            return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"
+        if self.command in ("POST", "PUT", "PATCH"):
+            if chunked:
+                return HTTPStatus.LENGTH_REQUIRED, "length_required"
+            if not length.isdecimal():
+                return HTTPStatus.BAD_REQUEST, "invalid_content_length"
+            media_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if int(length) and media_type != "application/json":
+                return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"
         return None
 
     def _authorized(self) -> bool:
@@ -1132,12 +1162,8 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def _body(self) -> dict[str, Any]:
-        try:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-        except ValueError as exc:
-            self.close_connection = True
-            raise PlayerError("invalid Content-Length") from exc
-        if not 0 <= length <= MAX_REQUEST_BYTES:
+        length = int(self.headers.get("Content-Length") or 0)  # framing validated by _rejection()
+        if length > MAX_REQUEST_BYTES:
             self.close_connection = True
             raise PlayerError("request body is too large")
         if length == 0:
@@ -1255,8 +1281,8 @@ def config_from_dict(config: dict[str, Any]) -> dict[str, Any]:
     if not 0 <= config["port"] <= 65535:
         raise PlayerError("port must be between 1 and 65535")
     token = config["auth_token"]
-    if not isinstance(token, str) or len(token) < MIN_TOKEN_LENGTH:
-        raise PlayerError(f"auth_token must be at least {MIN_TOKEN_LENGTH} characters")
+    if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+        raise PlayerError("auth_token must be at least 32 printable ASCII characters without spaces")
     hosts = config.setdefault("allowed_hosts", [])
     if not isinstance(hosts, list) or not all(isinstance(host, str) and host for host in hosts):
         raise PlayerError("allowed_hosts must be a list of host[:port] names")

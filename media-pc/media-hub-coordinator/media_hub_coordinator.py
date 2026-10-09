@@ -30,8 +30,9 @@ from pathlib import Path
 
 LOGGER = logging.getLogger("homehub-media-hub")
 MAX_REQUEST_BYTES = 4096
-MAX_CONNECTIONS = 16
-MIN_TOKEN_LENGTH = 32
+MAX_CONNECTIONS = 16  # for allowlisted peers
+MAX_UNLISTED_CONNECTIONS = 2  # everyone else: enough for their 403, too few to starve Home Assistant
+TOKEN_RE = re.compile(r"[\x21-\x7e]{32,}")
 CLIENT_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 # X11 keysyms accepted by Mutter's RemoteDesktop Session interface.
@@ -74,7 +75,7 @@ REMOTE_COMMANDS = frozenset(
 
 # ``shift_tab`` is intentionally internal.  The public API remains the fixed
 # allowlist above; Coordinator.remote() resolves browser navigation to this
-# command only for Sonarr and Radarr.
+# command only for clients configured with "tab_navigation": true.
 INPUT_COMMANDS = REMOTE_COMMANDS | frozenset({"shift_tab"})
 
 # Arr-style web applications use standard browser focus navigation rather than
@@ -101,6 +102,7 @@ class CoordinatorError(RuntimeError):
 class ClientConfig:
     unit: str
     home_url: str
+    tab_navigation: bool = False
 
 
 @dataclass(frozen=True)
@@ -131,8 +133,8 @@ class Config:
             raise CoordinatorError("listen_port must be between 1 and 65535")
         if not allowed_clients:
             raise CoordinatorError("allowed_clients must not be empty")
-        if not isinstance(auth_token, str) or len(auth_token) < MIN_TOKEN_LENGTH:
-            raise CoordinatorError(f"auth_token must be at least {MIN_TOKEN_LENGTH} characters")
+        if not isinstance(auth_token, str) or not TOKEN_RE.fullmatch(auth_token):
+            raise CoordinatorError("auth_token must be at least 32 printable ASCII characters without spaces")
         if not isinstance(allowed_hosts, list) or not all(isinstance(h, str) and h for h in allowed_hosts):
             raise CoordinatorError("allowed_hosts must be a list of host[:port] names")
         if not isinstance(raw_clients, dict) or not raw_clients:
@@ -154,7 +156,10 @@ class Config:
                 or not parsed_home.path
             ):
                 raise CoordinatorError(f"client home URL for {mode} must be a loopback HTTP URL")
-            clients[mode] = ClientConfig(unit=unit, home_url=home_url)
+            tab_navigation = raw_client.get("tab_navigation", False)
+            if not isinstance(tab_navigation, bool):
+                raise CoordinatorError(f"client tab_navigation for {mode} must be true or false")
+            clients[mode] = ClientConfig(unit=unit, home_url=home_url, tab_navigation=tab_navigation)
         return cls(
             listen_host=listen_host,
             listen_port=listen_port,
@@ -476,13 +481,17 @@ class Coordinator:
     def _systemctl(self, action: str, unit: str) -> subprocess.CompletedProcess[str]:
         if action not in {"start", "stop", "is-active"}:
             raise CoordinatorError("Refusing unsupported systemctl action")
-        return self._runner(
-            ["systemctl", "--user", action, unit],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
+        try:
+            return self._runner(
+                ["systemctl", "--user", action, unit],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:  # missing binary, timeout
+            LOGGER.warning("systemctl --user %s %s failed: %s", action, unit, exc)
+            raise CoordinatorError("systemd user manager is unavailable") from exc
 
     def status(self) -> dict[str, object]:
         active_modes = []
@@ -504,7 +513,7 @@ class Coordinator:
             "remote_available": active,
         }
 
-    def open(self, mode: str = "jellyfin") -> dict[str, object]:
+    def open(self, mode: str) -> dict[str, object]:
         with self._lock:
             if mode not in self.config.clients:
                 raise CoordinatorError("Refusing unsupported Media Hub app")
@@ -555,11 +564,10 @@ class Coordinator:
             if command not in REMOTE_COMMANDS:
                 raise CoordinatorError("Refusing unsupported remote command")
             current = self.status()
-            mode = str(current["mode"])
             remote_input = self._input_for_active_client(current)
             input_command = (
                 BROWSER_FOCUS_COMMANDS.get(command, command)
-                if mode in {"sonarr", "radarr"}
+                if self.config.clients[str(current["mode"])].tab_navigation
                 else command
             )
             remote_input.send(input_command)
@@ -606,22 +614,38 @@ class Coordinator:
 
 
 class CoordinatorServer(ThreadingHTTPServer):
-    """Threaded server with at most MAX_CONNECTIONS live connections; extras are closed unanswered."""
+    """Threaded server with per-peer-class connection pools; connections beyond a pool are closed unanswered.
+
+    The pool is chosen by source IP before any byte is read, so non-allowlisted hosts dripping slow
+    requests can only exhaust their own MAX_UNLISTED_CONNECTIONS, never Home Assistant's slots.
+    """
 
     daemon_threads = True
     coordinator: Coordinator
     allowed_hosts: frozenset[str]
     slots: threading.BoundedSemaphore
+    unlisted_slots: threading.BoundedSemaphore
+    held: dict  # request socket -> the pool it took a slot from
+
+    def client_allowed(self, host: str) -> bool:
+        try:
+            return ipaddress.ip_address(host) in self.coordinator.config.allowed_clients
+        except ValueError:
+            return False
 
     def process_request(self, request, client_address) -> None:
-        if not self.slots.acquire(blocking=False):
+        pool = self.slots if self.client_allowed(client_address[0]) else self.unlisted_slots
+        if not pool.acquire(blocking=False):
             self.close_request(request)
             return
+        self.held[request] = pool
         super().process_request(request, client_address)
 
     def shutdown_request(self, request) -> None:
         super().shutdown_request(request)
-        self.slots.release()
+        pool = self.held.pop(request, None)
+        if pool is not None:
+            pool.release()
 
 
 def make_server(config: Config) -> CoordinatorServer:
@@ -629,6 +653,8 @@ def make_server(config: Config) -> CoordinatorServer:
     server = CoordinatorServer((config.listen_host, config.listen_port), Handler)
     server.coordinator = Coordinator(config)
     server.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+    server.unlisted_slots = threading.BoundedSemaphore(MAX_UNLISTED_CONNECTIONS)
+    server.held = {}
     server.allowed_hosts = config.allowed_hosts or default_hosts(config.listen_host, server.server_port)
     return server
 
@@ -641,25 +667,26 @@ class Handler(BaseHTTPRequestHandler):
         LOGGER.info("%s %s", self.client_address[0], format_string % args)
 
     def _rejection(self) -> tuple[HTTPStatus, str] | None:
-        """Guard order is part of the API: IP 403, Host 421, bearer token 401, JSON body 415."""
-        config = self.server.coordinator.config
-        try:
-            client_allowed = ipaddress.ip_address(self.client_address[0]) in config.allowed_clients
-        except ValueError:
-            client_allowed = False
-        if not client_allowed:
+        """Guard order is part of the API: IP 403, Host 421, token 401, framing 411/400, JSON body 415."""
+        chunked = "Transfer-Encoding" in self.headers
+        length = (self.headers.get("Content-Length") or "0").strip()
+        if chunked or (self.command == "GET" and length != "0"):
+            self.close_connection = True  # an unread body must never be parsed as the next request
+        if not self.server.client_allowed(self.client_address[0]):
             return HTTPStatus.FORBIDDEN, "client_not_allowed"
         if (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
             return HTTPStatus.MISDIRECTED_REQUEST, "host_not_allowed"
         presented = (self.headers.get("Authorization") or "").encode()
-        if not hmac.compare_digest(presented, f"Bearer {config.auth_token}".encode()):
+        if not hmac.compare_digest(presented, f"Bearer {self.server.coordinator.config.auth_token}".encode()):
             return HTTPStatus.UNAUTHORIZED, "unauthorized"
-        if (
-            self.command in ("POST", "PUT", "PATCH")
-            and self.headers.get("Content-Length", "0") != "0"
-            and not (self.headers.get("Content-Type") or "").lower().startswith("application/json")
-        ):
-            return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"
+        if self.command in ("POST", "PUT", "PATCH"):
+            if chunked:
+                return HTTPStatus.LENGTH_REQUIRED, "length_required"
+            if not length.isdecimal():
+                return HTTPStatus.BAD_REQUEST, "invalid_content_length"
+            media_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if int(length) and media_type != "application/json":
+                return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"
         return None
 
     def _send(self, status: HTTPStatus, payload: dict[str, object]) -> None:
@@ -677,8 +704,10 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._send(rejection[0], {"error": rejection[1]})
             return None
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        if length < 0 or length > MAX_REQUEST_BYTES:
+        # Only POST bodies are read (framing validated by _rejection); a GET body just closes the connection.
+        length = int(self.headers.get("Content-Length") or 0) if self.command == "POST" else 0
+        if length > MAX_REQUEST_BYTES:
+            self.close_connection = True
             self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "request_too_large"})
             return None
         return self.rfile.read(length) if length else b""
@@ -704,15 +733,16 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(HTTPStatus.NOT_FOUND, {"error": "not_found"})
         except CoordinatorError as exc:
-            self._send(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(exc)})
+            self._send(HTTPStatus.CONFLICT, {"error": str(exc)})
 
     def do_POST(self) -> None:
         body = self._guard()
         if body is None:
             return
         try:
-            if self.path == "/v1/open":
-                self._send(HTTPStatus.OK, self.server.coordinator.open())
+            if self.path == "/v1/open":  # legacy: the first configured client
+                first = next(iter(self.server.coordinator.config.clients))
+                self._send(HTTPStatus.OK, self.server.coordinator.open(first))
             elif self.path.startswith("/v1/open/"):
                 mode = self.path.removeprefix("/v1/open/")
                 self._send(HTTPStatus.OK, self.server.coordinator.open(mode))
