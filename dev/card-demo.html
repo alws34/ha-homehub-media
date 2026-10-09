@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeHub Media card demo</title>
+<!--
+  Standalone dev page for custom_components/homehub_media/www/homehub-media-card.js.
+  Serve the repo root (python3 -m http.server 8765) and open /dev/card-demo.html.
+  A fake `hass` emits a K4 snapshot, answers the catalog/library websocket calls and
+  mutates the snapshot on service calls. ha-card and ha-icon are stubbed.
+  Query params (for screenshots): theme=light|dark, tab=remote|ambience|library, edit=<mode id>,
+  target=tv|box|pc, touchpad=1, drawer=1, open=1, w=<card px>, shot=1 (hide dev chrome).
+-->
+<style>
+  :root, .light {
+    --primary-background-color: #fafafa; --card-background-color: #fff; --primary-text-color: #212121;
+    --secondary-text-color: #727272; --divider-color: rgba(0, 0, 0, .12); --primary-color: #03a9f4;
+    --rgb-primary-color: 3, 169, 244; --text-primary-color: #fff; --error-color: #db4437; --warning-color: #ffa600;
+    --ha-card-border-radius: 12px; --ha-card-border-color: #e0e0e0; color-scheme: light;
+  }
+  .dark {
+    --primary-background-color: #111; --card-background-color: #1c1c1c; --primary-text-color: #e1e1e1;
+    --secondary-text-color: #9b9b9b; --divider-color: rgba(225, 225, 225, .12); --ha-card-border-color: rgba(225, 225, 225, .12);
+    color-scheme: dark;
+  }
+  body {
+    margin: 0; min-height: 100vh; background: var(--primary-background-color); color: var(--primary-text-color);
+    font: 14px/1.4 Roboto, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
+  }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--divider-color); }
+  .bar b { margin-right: 8px; }
+  .bar button, .bar select { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--divider-color); background: var(--card-background-color); color: inherit; cursor: pointer; }
+  main { padding: 16px; }
+  #slot { margin: 0 auto; }
+  .dash { display: none; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .dash div { height: 140px; border-radius: 12px; background: var(--card-background-color); border: 1px solid var(--ha-card-border-color); }
+  body.drawer .dash { display: grid; }
+  #log { max-width: 760px; margin: 24px auto 0; font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--secondary-text-color); white-space: pre-wrap; }
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; transition: .2s; pointer-events: none;
+    padding: 12px 18px; border-radius: 8px; background: #323232; color: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); z-index: 10;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  body.shot .bar, body.shot #log { display: none; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <b>HomeHub Media card</b>
+  <button id="theme">Toggle theme</button>
+  <select id="layout"><option value="400">Phone</option><option value="820">Tablet</option><option value="drawer">Drawer</option></select>
+  <button id="np">Toggle now playing</button>
+  <button id="tvoff">Toggle TV available</button>
+  <button id="ime">Toggle TV keyboard</button>
+</div>
+<main>
+  <div class="dash"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+  <div id="slot"></div>
+  <div id="log"></div>
+</main>
+<div id="toast" role="status"></div>
+
+<script type="module">
+const q = new URLSearchParams(location.search);
+const $ = (s) => document.querySelector(s);
+
+// ---------- theme ----------
+let dark = q.has("theme") ? q.get("theme") === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+const applyTheme = () => { document.documentElement.className = dark ? "dark" : "light"; };
+applyTheme();
+if (q.get("shot") === "1") document.body.classList.add("shot");
+
+// ---------- ha-card / ha-icon stubs ----------
+customElements.define("ha-card", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = `<style>:host{display:block;background:var(--ha-card-background,var(--card-background-color));
+      border-radius:var(--ha-card-border-radius,12px);border:1px solid var(--ha-card-border-color,var(--divider-color));
+      box-shadow:var(--ha-card-box-shadow,none);color:var(--primary-text-color)}</style><slot></slot>`;
+  }
+});
+let MDI = null;
+const icons = new Set();
+customElements.define("ha-icon", class extends HTMLElement {
+  static observedAttributes = ["icon"];
+  constructor() { super(); this.attachShadow({ mode: "open" }); }
+  connectedCallback() { icons.add(this); this.draw(); }
+  disconnectedCallback() { icons.delete(this); }
+  attributeChangedCallback() { this.draw(); }
+  draw() {
+    const name = (this.getAttribute("icon") || "").replace(/^mdi:/, "");
+    const d = MDI?.["mdi" + name.split("-").map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join("")] || "";
+    this.shadowRoot.innerHTML = `<style>:host{display:inline-flex;width:var(--mdc-icon-size,24px);height:var(--mdc-icon-size,24px)}
+      svg{width:100%;height:100%;fill:currentColor}</style><svg viewBox="0 0 24 24">${d ? `<path d="${d}"/>` : `<circle cx="12" cy="12" r="5" opacity=".4"/>`}</svg>`;
+  }
+});
+import("https://cdn.jsdelivr.net/npm/@mdi/js@7.4.47/mdi.js")
+  .then((m) => { MDI = m; icons.forEach((i) => i.draw()); })
+  .catch(() => console.warn("MDI icons unavailable offline; showing placeholders"));
+
+// ---------- placeholder art: same-origin blob: URLs, so the card's same-origin check accepts them ----------
+const blob = (svg) => URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+const scene = (bg, glows) => blob(`<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${bg[0]}"/><stop offset="1" stop-color="${bg[1]}"/></linearGradient>
+  <filter id="b"><feGaussianBlur stdDeviation="38"/></filter></defs>
+  <rect width="640" height="360" fill="url(#g)"/>
+  <g filter="url(#b)">${glows.map(([x, y, r, c]) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${c}"/>`).join("")}</g></svg>`);
+const poster = (title, a, b) => blob(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300" viewBox="0 0 200 300">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
+  <rect width="200" height="300" fill="url(#g)"/><circle cx="150" cy="70" r="70" fill="#fff" opacity=".08"/>
+  <text x="16" y="262" fill="#fff" font-family="Georgia, serif" font-size="22" font-weight="700">${title}</text></svg>`);
+
+const VISUALS = [
+  ["fireplace", "Fireplace", ["#1a0a05", "#3b1206"], [[320, 300, 120, "#ff7a1a"], [250, 280, 70, "#ffb347"], [400, 290, 80, "#ff4500"]], true],
+  ["aquarium", "Aquarium", ["#022b45", "#04607a"], [[180, 120, 90, "#38c6f4"], [470, 230, 110, "#0aa5a8"]], false],
+  ["hogwarts", "Hogwarts Library", ["#120b1f", "#2b1a3c"], [[150, 260, 90, "#f2b45b"], [480, 120, 70, "#7a4bc2"]], false],
+  ["abstract", "Abstract Flow", ["#1b0533", "#0b2a4a"], [[200, 140, 120, "#e040fb"], [450, 220, 130, "#00e5ff"]], false],
+  ["rain", "Rain on Glass", ["#26323d", "#3e4f5c"], [[320, 120, 150, "#7f9bb0"], [120, 300, 80, "#a7c1d4"]], true],
+  ["dog_tv", "DOG TV", ["#6ec6ff", "#7cc96b"], [[500, 80, 70, "#fff59d"], [200, 320, 140, "#3d9a3d"]], false],
+  ["northern_lights", "Northern Lights", ["#03101f", "#0a2238"], [[200, 100, 120, "#29f19c"], [430, 140, 100, "#5f6cf7"]], false],
+];
+const SOUNDTRACKS = [
+  ["lofi_beats", "Lo-fi Beats Radio", true, null],
+  ["jazz_cafe", "Jazz Café", false, 3720],
+  ["mozart_rondo_k511", "Mozart · Rondo K.511", false, 564],
+  ["crackling_fire", "Crackling Fire", false, 3600],
+  ["forest_birds", "Forest Birds", false, 2700],
+];
+const catalog = {
+  visuals: VISUALS.map(([id, title, bg, glows, favorite]) => ({
+    id, kind: "visual", title, source_type: "file", live: id === "dog_tv", duration: id === "dog_tv" ? null : 1800 + title.length * 60,
+    favorite, preview: scene(bg, glows),
+  })),
+  soundtracks: SOUNDTRACKS.map(([id, title, live, duration], i) => ({
+    id, kind: "soundtrack", title, source_type: live ? "stream" : "file", live, duration, favorite: i === 2,
+    preview: id === "crackling_fire" ? scene(["#1a0a05", "#3b1206"], [[320, 200, 120, "#ff7a1a"]]) : null,
+  })),
+};
+const P = (id, title, subtitle, progress, a, b) => ({ id, server: "", title, subtitle, type: subtitle ? "episode" : "movie", progress, image: poster(title.split(":")[0], a, b) });
+const library = {
+  plex: {
+    continue: [P("101", "The Bear", "S3 · E4", 0.62, "#3b2a1a", "#a5622b"), P("102", "Severance", "S2 · E7", 0.35, "#0c2a3a", "#4a8fb0"),
+      P("103", "Dune: Part Two", null, 0.18, "#5a3410", "#d79a4a"), P("104", "Slow Horses", "S4 · E2", 0.81, "#1f2a1f", "#5d7a4e")],
+    recent: [P("201", "Andor", "Season 2", null, "#2a1212", "#8f3a2a"), P("202", "Shōgun", "Season 1", null, "#1a1a1a", "#7a1f1f"),
+      P("203", "The Last of Us", "Season 2", null, "#1f2a1a", "#6b7a3a"), P("204", "Arcane", "Season 2", null, "#1a0f2e", "#2bb3c0"),
+      P("205", "Fallout", "Season 1", null, "#2e2a12", "#c7a63a")],
+  },
+  jellyfin: {
+    continue: [P("j1", "Planet Earth III", "E3 · Ocean", 0.44, "#08304a", "#1d8fb8")],
+    recent: [P("j2", "Blade Runner 2049", null, null, "#2a1a05", "#e07b1a"), P("j3", "Interstellar", null, null, "#0a0a12", "#59647a"),
+      P("j4", "Spirited Away", null, null, "#12302a", "#7ac0a0")],
+  },
+};
+for (const [srv, rows] of Object.entries(library)) for (const r of Object.values(rows)) r.forEach((i) => { i.server = srv; });
+
+// ---------- K4 snapshot ----------
+const MODES = [
+  ["fireplace", "Fireplace", "mdi:fireplace", false], ["dinner", "Dinner", "mdi:silverware-fork-knife", false],
+  ["reading", "Reading", "mdi:book-open-variant", false], ["game_night", "Game Night", "mdi:dice-multiple", false],
+  ["chill", "Chill", "mdi:sofa", false], ["movie_time", "Movie Time", "mdi:movie-open", true], ["dog_tv", "DOG TV", "mdi:dog", false],
+];
+const comp = (visual, soundtrack, mix) => ({
+  visual, visual_enabled: !!visual, video_loop: true, video_random_start: true, original_volume: 100 - mix,
+  soundtrack, soundtrack_loop: true, soundtrack_random_start: true, soundtrack_volume: mix,
+});
+const nowPlaying = {
+  server: "plex", player: "Living Room TV", title: "The Bear", subtitle: "S3 · E4 · Violet", state: "playing",
+  position: 1265, duration: 2040, image: library.plex.continue[0].image,
+};
+const snap = {
+  tv: { available: true, power: "on", volume: 19, muted: false, keyboard_active: false, pointer_active: false, app: "netflix" },
+  activity: { current: "tv", phase: "ready", quiet: false, available: ["off", "tv", "box", "pc"] },
+  targets: { box: true, pc: true, keyboard: false },
+  apps: [
+    ["netflix", "Netflix"], ["youtube", "YouTube"], ["prime_video", "Prime Video"], ["disney_plus", "Disney+"],
+    ["apple_tv", "Apple TV"], ["max", "Max"], ["plex", "Plex"], ["jellyfin", "Jellyfin"], ["spotify", "Spotify"],
+    ["twitch", "Twitch", false], ["paramount_plus", "Paramount+", false], ["browser", "Browser"],
+  ].map(([key, name, installed = true]) => ({ key, name, installed })),
+  ambience: {
+    backend: "tv", mode: "dinner", error: null, sleep_until: new Date(Date.now() + 42 * 60000).toISOString(), auto: false, daypart_mode: "chill",
+    modes: MODES.map(([id, name, icon, lights_only]) => ({ id, name, icon, lights_only, lighting: true, flicker: id === "fireplace" })),
+    compositions: { dinner: comp("aquarium", "jazz_cafe", 70), fireplace: comp("fireplace", "crackling_fire", 40), chill: comp("rain", "lofi_beats", 60) },
+  },
+  now_playing: [nowPlaying],
+  servers: ["plex", "jellyfin"],
+  pc: { clients: ["jellyfin", "plex", "sonarr", "radarr"], active: null },
+};
+if (q.has("target")) snap.activity.current = q.get("target");
+
+// ---------- fake hass ----------
+const subs = new Set();
+const emit = () => subs.forEach((cb) => cb(structuredClone(snap)));
+const log = (line) => {
+  const el = $("#log");
+  el.textContent = `${new Date().toLocaleTimeString()}  ${line}\n${el.textContent}`.split("\n").slice(0, 40).join("\n");
+};
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const fail = (message) => Promise.reject({ code: "home_assistant_error", message });
+
+const services = {
+  remote({ command, target }) {
+    const tv = snap.tv;
+    if (command === "volume_up") tv.volume = Math.min(100, tv.volume + 1);
+    else if (command === "volume_down") tv.volume = Math.max(0, tv.volume - 1);
+    else if (command === "mute") tv.muted = !tv.muted;
+    else if (snap.now_playing.length && ["play", "pause", "rewind", "fast_forward"].includes(command)) {
+      const n = snap.now_playing[0];
+      if (command === "play" || command === "pause") n.state = command === "play" ? "playing" : "paused";
+      else n.position = Math.max(0, n.position + (command === "rewind" ? -30 : 30));
+    }
+    if (!tv.available && target === "tv") return fail("TV is off or unreachable");
+  },
+  launch_app({ app }) { snap.tv.app = app; snap.activity.current = "tv"; },
+  restart_app() {},
+  send_text({ target }) {
+    if ((target ?? "tv") === "tv" && !snap.tv.keyboard_active) return fail("No text field is focused on the TV");
+  },
+  keyboard_key() {},
+  pointer({ action, target }) {
+    if (target === "tv" && action !== "move" && action !== "click") return fail("Not supported on the TV");
+  },
+  channel() {},
+  pc_open({ client }) { snap.pc.active = client; snap.activity.current = "pc"; },
+  pc_close() { snap.pc.active = null; },
+  ambience_start({ mode }) { snap.ambience.mode = mode; snap.ambience.auto = false; },
+  ambience_stop() { snap.ambience.mode = "off"; snap.ambience.auto = false; snap.ambience.sleep_until = null; },
+  ambience_auto() { snap.ambience.mode = snap.ambience.daypart_mode; snap.ambience.auto = true; },
+  ambience_update() {},
+  ambience_sleep_timer({ minutes }) {
+    snap.ambience.sleep_until = minutes ? new Date(Date.now() + minutes * 60000).toISOString() : null;
+  },
+  save_mode({ mode, ...c }) { snap.ambience.compositions[mode] = c; },
+  set_favorite({ kind, media_id, favorite }) {
+    const item = catalog[kind === "visual" ? "visuals" : "soundtracks"].find((i) => i.id === media_id);
+    if (item) item.favorite = favorite;
+  },
+  refresh_catalog() { return wait(600); },
+  rescan_apps() {},
+  play_library_item({ server, item_id }) {
+    const it = Object.values(library[server]).flat().find((i) => i.id === item_id);
+    snap.now_playing = [{ ...nowPlaying, server, title: it.title, subtitle: it.subtitle, position: 0, image: it.image }];
+  },
+};
+
+const hass = {
+  themes: { darkMode: dark },
+  connection: {
+    subscribeMessage(cb, msg) {
+      if (msg.type !== "homehub_media/subscribe") return Promise.reject({ code: "unknown_command", message: "Unknown command" });
+      subs.add(cb);
+      setTimeout(() => cb(structuredClone(snap)), 120);
+      return Promise.resolve(() => subs.delete(cb));
+    },
+  },
+  async callWS(msg) {
+    log(`ws ${JSON.stringify(msg)}`);
+    await wait(250);
+    if (msg.type === "homehub_media/catalog") return structuredClone(catalog);
+    if (msg.type === "homehub_media/library") return structuredClone(library);
+    throw { code: "unknown_command", message: "Unknown command" };
+  },
+  async callService(domain, service, data = {}) {
+    log(`${domain}.${service} ${JSON.stringify(data)}`);
+    const fn = services[service];
+    if (domain !== "homehub_media" || !fn) throw { code: "service_not_found", message: `Unknown service ${domain}.${service}` };
+    await wait(60);
+    await fn(data);
+    emit();
+  },
+};
+setInterval(() => {  // the backend re-polls sessions every 10 s
+  const n = snap.now_playing[0];
+  if (n?.state === "playing") { n.position = Math.min(n.duration, n.position + 10); emit(); }
+}, 10000);
+
+// ---------- toasts (HA shows hass-notification as a snackbar) ----------
+let toastTimer;
+document.addEventListener("hass-notification", (e) => {
+  const t = $("#toast");
+  t.textContent = e.detail.message;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 3000);
+});
+
+// ---------- mount ----------
+await import("../custom_components/homehub_media/www/homehub-media-card.js");
+let layout = q.get("drawer") === "1" ? "drawer" : q.get("w") || "400";
+function mount() {
+  $("#slot").replaceChildren();
+  document.body.classList.toggle("drawer", layout === "drawer");
+  if (layout === "drawer" && q.has("open")) localStorage.setItem("homehub-media-card:drawer", q.get("open") === "1" ? "open" : "closed");
+  const card = document.createElement("homehub-media-card");
+  card.setConfig({ drawer: layout === "drawer", default_tab: q.get("tab") || "remote" });
+  card.hass = hass;
+  $("#slot").style.maxWidth = layout === "drawer" ? "" : `${layout}px`;
+  $("#slot").append(card);
+  $("#layout").value = ["400", "820", "drawer"].includes(layout) ? layout : "400";
+  return card;
+}
+let card = mount();
+
+// screenshot helpers: drive the card into the requested state once data is in
+(async () => {
+  while (!card._snap) await wait(50);
+  if (q.has("target")) card._setTarget(q.get("target"));
+  if (q.get("touchpad") === "1") { card._touchpad = true; card._render(); }
+  if (q.has("edit")) {
+    card._setTab("ambience");
+    while (!card._catalog) await wait(50);
+    card._openEditor(q.get("edit"));
+  }
+})();
+
+$("#theme").onclick = () => { dark = !dark; hass.themes = { darkMode: dark }; applyTheme(); };
+$("#layout").onchange = (e) => { layout = e.target.value; card = mount(); };
+$("#np").onclick = () => { snap.now_playing = snap.now_playing.length ? [] : [nowPlaying]; emit(); };
+$("#tvoff").onclick = () => { snap.tv.available = !snap.tv.available; emit(); };
+$("#ime").onclick = () => { snap.tv.keyboard_active = !snap.tv.keyboard_active; emit(); };
+</script>
+</body>
+</html>
