@@ -10,7 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.homehub_media import config_flow
-from custom_components.homehub_media.const import DEFAULT_MODES, DOMAIN
+from custom_components.homehub_media.const import DEFAULT_DAYPARTS, DEFAULT_MODES, DOMAIN
 from custom_components.homehub_media.tv import CannotConnect, PairingDenied, SamsungTV
 
 DATA = {"host": "192.0.2.1", "mac": None, "token": "t", "port": 8002}
@@ -37,8 +37,9 @@ def tv():
 
 @pytest.fixture
 def entry(hass):
-    entry = MockConfigEntry(domain=DOMAIN, data=DATA,
-                            options={"ambience": {"backend": "tv", "radio": {}}, "modes": DEFAULT_MODES})
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA, options={
+        "ambience": {"backend": "tv", "radio": {}}, "modes": DEFAULT_MODES,
+        "dayparts": {**DEFAULT_DAYPARTS, "morning": {"start": "06:00", "mode": "chill"}}})
     entry.add_to_hass(hass)
     return entry
 
@@ -182,10 +183,47 @@ async def test_pc_step(hass, entry, aioclient_mock):
     assert entry.options["pc"] == {**pc, "host": "media-pc.lan"}
 
 
-async def test_plex_invalid_auth(hass, entry, aioclient_mock):
+async def test_pc_keeps_secrets_and_removal_resets_backend(hass, aioclient_mock):
+    pc = {"host": "media-pc.lan", "ambient_port": 8097, "ambient_token": "a", "coord_port": 8098,
+          "coord_token": "c", "input": INPUT_KEY, "clients": []}
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA, options={"pc": pc, "ambience": {"backend": "pc", "radio": {}}})
+    entry.add_to_hass(hass)
+    aioclient_mock.get("http://media-pc.lan:8097/v2/status", json={})
+    aioclient_mock.get("http://media-pc.lan:8098/v1/status", json={})
+    result = await _open(hass, entry, "pc")
+    assert _schema(result, "host")[0] == "media-pc.lan"
+    assert _schema(result, "ambient_token")[0] is None and _schema(result, "coord_token")[0] is None
+    public = {k: v for k, v in pc.items() if "token" not in k}
+    result = await _submit(hass, result, {**public, "clients": ["My App"]})
+    assert result["errors"] == {"clients": "invalid_client"}
+    result = await _submit(hass, result, public)  # blank tokens keep the saved ones
+    assert [c[3]["Authorization"] for c in aioclient_mock.mock_calls] == ["Bearer a", "Bearer c"]
+    result = await _submit(hass, result, {"next_step_id": "pc"})
+    result = await _submit(hass, result, {"ambient_port": 8097, "coord_port": 8098, "input": INPUT_KEY})
+    await _save(hass, result)
+    assert entry.options["pc"] is None and entry.options["ambience"]["backend"] == "tv"
+
+
+async def test_keyboard_step_keeps_saved_key(hass, entry):
+    result = await _open(hass, entry, "keyboard")
+    result = await _submit(hass, result, {"host": "kb lan", "key": "k1"})
+    assert result["errors"] == {"host": "invalid_host"}
+    result = await _submit(hass, result, {"host": "kb.lan", "key": "k1"})
+    result = await _submit(hass, result, {"next_step_id": "keyboard"})
+    assert _schema(result, "host")[0] == "kb.lan" and _schema(result, "key")[0] is None
+    result = await _submit(hass, result, {"host": "kb.lan"})
+    await _save(hass, result)
+    assert entry.options["keyboard"] == {"host": "kb.lan", "key": "k1"}
+
+
+async def test_servers_invalid_auth(hass, entry, aioclient_mock):
     aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", status=401)
+    aioclient_mock.get(f"{JF}/Users", status=403)
     result = await _open(hass, entry, "servers", "plex")
     result = await _submit(hass, result, {"url": PLEX, "token": "bad"})
+    assert result["errors"] == {"base": "invalid_auth"}
+    result = await _open(hass, entry, "servers", "jellyfin")
+    result = await _submit(hass, result, {"url": JF, "api_key": "bad"})
     assert result["errors"] == {"base": "invalid_auth"}
 
 
@@ -215,12 +253,15 @@ async def test_jellyfin_user_dropdown(hass, entry, aioclient_mock):
 
 
 async def test_assistant_lists_models(hass, entry):
+    models = ["claude-haiku-4", "claude-opus-5-5"]
     with (patch.object(config_flow.assistant, "ensure_sdk", AsyncMock()) as sdk,
           patch.object(config_flow.assistant, "list_models", AsyncMock(
-              side_effect=[HomeAssistantError("invalid_auth"), ["claude-haiku-4", "claude-opus-5-5"]]))):
+              side_effect=[HomeAssistantError("invalid_auth"), models, models])) as list_models):
         result = await _open(hass, entry, "assistant")
         result = await _submit(hass, result, {"provider": "claude"})
         assert result["step_id"] == "assistant_auth"
+        result = await _submit(hass, result, {})
+        assert result["errors"] == {"api_key": "api_key_required"}
         result = await _submit(hass, result, {"api_key": "bad"})
         assert result["errors"] == {"base": "invalid_auth"}
         result = await _submit(hass, result, {"api_key": "sk"})
@@ -228,6 +269,12 @@ async def test_assistant_lists_models(hass, entry):
         default, selector = _schema(result, "model")
         assert default == "claude-opus-5-5" and selector.config["options"] == ["claude-haiku-4", "claude-opus-5-5"]
         sdk.assert_awaited_with(hass, "claude")
+        result = await _submit(hass, result, {"model": "claude-opus-5-5"})
+        result = await _submit(hass, result, {"next_step_id": "assistant"})
+        result = await _submit(hass, result, {"provider": "claude"})
+        assert _schema(result, "api_key")[0] is None  # the saved key is never sent back
+        result = await _submit(hass, result, {})  # blank keeps it
+        assert list_models.await_args.args == (hass, "claude", None, "sk")
         result = await _submit(hass, result, {"model": "claude-opus-5-5"})
         await _save(hass, result)
     assert entry.options["assistant"] == {"provider": "claude", "url": None, "api_key": "sk",
@@ -239,6 +286,9 @@ async def test_modes_add_edit_delete(hass, entry):
     result = await _submit(hass, result, {"mode": config_flow.NEW_MODE})
     result = await _submit(hass, result, {"name": "Reading", "icon": "mdi:book"})
     assert result["errors"] == {"name": "mode_exists"}
+    for bad in ("  ", "Off"):
+        result = await _submit(hass, result, {"name": bad, "icon": "mdi:book"})
+        assert result["errors"] == {"name": "invalid_name"}
     result = await _submit(hass, result, {"name": "Movie Night", "icon": "mdi:movie", "flicker": ["light.a"]})
     result = await _submit(hass, result, {"next_step_id": "modes"})
     result = await _submit(hass, result, {"mode": "dinner"})
@@ -251,6 +301,8 @@ async def test_modes_add_edit_delete(hass, entry):
     await _save(hass, result)
     modes = {m["id"]: m for m in entry.options["modes"]}
     assert "chill" not in modes
+    assert entry.options["dayparts"]["morning"] == {"start": "06:00", "mode": None}  # no dangling reference
+    assert entry.options["dayparts"]["idle_minutes"] == DEFAULT_DAYPARTS["idle_minutes"]
     assert modes["movie_night"] == {"id": "movie_night", "name": "Movie Night", "icon": "mdi:movie", "scene": None,
                                     "flicker": ["light.a"], "lights_only": False}
     assert modes["dinner"] == {"id": "dinner", "name": "Supper", "icon": "mdi:food", "scene": "scene.dinner",

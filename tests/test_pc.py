@@ -3,7 +3,7 @@ import pytest
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.homehub_media.keyboard import KeyboardBridge
-from custom_components.homehub_media.pc import AmbientPlayerClient, CoordinatorClient, PCError
+from custom_components.homehub_media.pc import AmbientPlayerClient, CoordinatorClient, PCAuthError, PCError
 
 AP = "http://192.0.2.5:8097"
 CO = "http://192.0.2.5:8098"
@@ -20,6 +20,16 @@ async def test_401_maps_to_token_error(hass, aioclient_mock):
     aioclient_mock.post("http://192.0.2.5:8098/v1/open/jellyfin", status=401)
     with pytest.raises(PCError, match="token"):
         await CoordinatorClient(hass, "192.0.2.5", 8098, "bad").open("jellyfin")
+
+
+async def test_auth_rejection_is_typed(hass, aioclient_mock):
+    aioclient_mock.get(f"{AP}/v2/status", status=403)
+    aioclient_mock.get(f"{CO}/v1/status", status=500)
+    with pytest.raises(PCAuthError):
+        await AmbientPlayerClient(hass, "192.0.2.5", 8097, "bad").status()
+    with pytest.raises(PCError) as err:
+        await CoordinatorClient(hass, "192.0.2.5", 8098, "t").status()
+    assert not isinstance(err.value, PCAuthError)
 
 
 @pytest.mark.parametrize(

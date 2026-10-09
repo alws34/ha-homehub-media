@@ -17,6 +17,10 @@ class PCError(HomeAssistantError):
     """The media PC refused or could not serve a request."""
 
 
+class PCAuthError(PCError):
+    """The media PC rejected the bearer token (HTTP 401/403)."""
+
+
 class _PCClient:
     def __init__(self, hass: HomeAssistant, host: str, port: int, token: str) -> None:
         self._session = async_get_clientsession(hass)
@@ -35,7 +39,7 @@ class _PCClient:
                             msg = str((await resp.json(content_type=None))["error"])
                         except (ValueError, KeyError, TypeError):
                             pass
-                    raise PCError(msg)
+                    raise (PCAuthError if resp.status in (401, 403) else PCError)(msg)
                 return await resp.json(content_type=None) or {}
         except (aiohttp.ClientError, TimeoutError) as err:
             raise PCError("Media PC is unreachable") from err
