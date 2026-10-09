@@ -123,8 +123,8 @@ async def test_keyboard_type_and_key(hass, aioclient_mock):
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [
-        ({"status": 401}, "Keyboard bridge rejected the key"),
-        ({"status": 403}, "Keyboard bridge rejected the key"),
+        ({"status": 401}, "Keyboard bridge rejected the shared key"),
+        ({"status": 403}, "Keyboard bridge rejected the shared key"),
         ({"status": 500}, "Keyboard bridge request failed"),
         ({"exc": aiohttp.ClientConnectionError}, "Keyboard bridge is unreachable"),
         ({"exc": TimeoutError}, "Keyboard bridge is unreachable"),

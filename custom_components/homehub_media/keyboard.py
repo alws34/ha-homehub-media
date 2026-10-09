@@ -13,7 +13,7 @@ class KeyboardBridge:
     def __init__(self, hass: HomeAssistant, host: str, key: str) -> None:
         self._session = async_get_clientsession(hass)
         self._base = f"http://{host}"
-        self._headers = {"X-HomeHub-Key": key, "Content-Type": "text/plain; charset=utf-8"}
+        self._headers = {"X-HomeHub-Key": key, "Content-Type": "text/plain"}
 
     async def type(self, text: str) -> None:
         await self._post("/type", text)
@@ -28,7 +28,7 @@ class KeyboardBridge:
             ) as resp:
                 if resp.status >= 400:
                     raise HomeAssistantError(
-                        "Keyboard bridge rejected the key" if resp.status in (401, 403)
+                        "Keyboard bridge rejected the shared key" if resp.status in (401, 403)
                         else "Keyboard bridge request failed"
                     )
         except (aiohttp.ClientError, TimeoutError) as err:
