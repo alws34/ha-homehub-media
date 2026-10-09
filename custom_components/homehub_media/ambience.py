@@ -120,7 +120,10 @@ class AmbienceManager:
         return cat.validate_composition({"visual": pref if pref in ids else next(iter(ids), None)})
 
     async def async_load(self) -> None:
+        """Local data only: fast, and awaited in setup so a save right after it cannot race the load."""
         await self._store.async_load()
+
+    async def async_load_catalog(self) -> None:
         try:
             await self.refresh_catalog()
         except HomeAssistantError as err:
