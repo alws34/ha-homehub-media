@@ -1,0 +1,18 @@
+{
+  "bind_host": "YOUR_UBUNTU_HOST_IP",
+  "port": 8097,
+  "allowed_clients": [
+    "127.0.0.1",
+    "YOUR_HOME_ASSISTANT_IP"
+  ],
+  "video_root": "/srv/homehub/jellyfin-media/library/Ambience/Videos",
+  "soundtrack_root": "/srv/homehub/jellyfin-media/library/Ambience/Soundtracks",
+  "state_file": "/home/YOUR_LINUX_USER/.local/state/ambient-player/state.json",
+  "legacy_scenes": {},
+  "video_aliases": {},
+  "soundtrack_aliases": {},
+  "soundtrack_streams": {},
+  "default_profiles": {},
+  "hdmi_wait_seconds": 20,
+  "audio_only_image": "/opt/ambient-player/audio_only.ppm"
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Home Hub Media Hub mode coordinator
+After=graphical-session.target network-online.target ambient-player.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/homehub-media-hub/media_hub_coordinator.py --config /etc/homehub-media-hub/coordinator.json
+Restart=on-failure
+RestartSec=3
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%t
+
+[Install]
+WantedBy=default.target

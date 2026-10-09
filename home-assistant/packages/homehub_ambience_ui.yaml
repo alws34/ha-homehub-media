@@ -1,0 +1,1493 @@
+# Home Hub Ambience Composer — functional catalog/profile controls
+# Version: 1.8.3 (2026-08-30)
+# Intended destination:
+#   /homeassistant/packages/homehub_ambience_ui_placeholders.yaml
+#
+# The legacy filename is retained to avoid duplicate helpers during migration.
+# The entities are no longer placeholders: Refresh, Save, Start, favorites,
+# dynamic catalog selectors, and profile loading all call the v2 host backend.
+
+input_select:
+  homehub_media_ambience_ui_editor_mode:
+    name: HomeHub Ambience Editor Mode
+    icon: mdi:tune-variant
+    options:
+      - Closed
+      - Fireplace
+      - Dinner
+      - Reading
+      - Game Night
+      - Chill
+    initial: Closed
+
+  # Safe boot state is intentionally catalog-neutral. Sync/Refresh replaces
+  # this with the exact IDs returned by the live backend; no historical aliases
+  # are guessed or carried into playback.
+  homehub_media_ambience_ui_visual:
+    name: HomeHub Ambience Visual
+    icon: mdi:image-multiple-outline
+    options:
+      - No visual
+    initial: No visual
+
+  homehub_media_ambience_ui_soundtrack:
+    name: HomeHub Ambience Soundtrack
+    icon: mdi:album
+    options:
+      - No soundtrack
+    initial: No soundtrack
+
+  # Dynamic favorite ID mirrors for the catalog-driven frontend card.
+  # Their attributes.options lists are the authoritative UI favorite sets.
+  # "No favorites" is only a non-empty sentinel required for safe startup.
+  homehub_media_ambience_ui_visual_favorites:
+    name: HomeHub Ambience Visual Favorites
+    icon: mdi:star-multiple-outline
+    options:
+      - No favorites
+    initial: No favorites
+
+  homehub_media_ambience_ui_soundtrack_favorites:
+    name: HomeHub Ambience Soundtrack Favorites
+    icon: mdi:star-music-outline
+    options:
+      - No favorites
+    initial: No favorites
+
+input_boolean:
+  homehub_media_ambience_ui_visual_enabled:
+    name: HomeHub Ambience Visual Enabled
+    icon: mdi:television-play
+    initial: true
+
+  homehub_media_ambience_ui_audio_enabled:
+    name: HomeHub Ambience Audio Enabled
+    icon: mdi:music-note
+    initial: true
+
+  homehub_media_ambience_ui_lighting_enabled:
+    name: HomeHub Ambience Lighting Preset Enabled
+    icon: mdi:lightbulb-group-outline
+    initial: true
+
+  homehub_media_ambience_ui_visual_favorite:
+    name: HomeHub Ambience Visual Favorite
+    icon: mdi:star-outline
+    initial: false
+
+  # Per-visual favorite mirrors used by the image carousel.
+  # The backend catalog remains authoritative; these helpers only expose
+  # each card's independent favorite state to Lovelace.
+  homehub_media_ambience_ui_visual_favorite_aquarium:
+    name: HomeHub Ambience Visual Favorite · Aquarium
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_favorite_abstract:
+    name: HomeHub Ambience Visual Favorite · Abstract
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_favorite_fireplace:
+    name: HomeHub Ambience Visual Favorite · Fireplace
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_favorite_hogwarts:
+    name: HomeHub Ambience Visual Favorite · Hogwarts
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_favorite_rain:
+    name: HomeHub Ambience Visual Favorite · Rain
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_favorite_ocean:
+    name: HomeHub Ambience Visual Favorite · Ocean
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_favorite_space:
+    name: HomeHub Ambience Visual Favorite · Space
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_favorite_dog_tv:
+    name: HomeHub Ambience Visual Favorite · DOG TV
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_soundtrack_favorite:
+    name: HomeHub Ambience Soundtrack Favorite
+    icon: mdi:star-music-outline
+    initial: false
+
+  # Per-soundtrack favorite mirror for the soundtrack carousel.
+  # The backend catalog remains authoritative.
+  homehub_media_ambience_ui_soundtrack_favorite_mozart_rondo_k511:
+    name: HomeHub Ambience Soundtrack Favorite · Mozart Rondo K.511
+    icon: mdi:star
+    initial: false
+
+  homehub_media_ambience_ui_visual_loop:
+    name: HomeHub Ambience Visual Loop
+    icon: mdi:repeat
+    initial: true
+
+  homehub_media_ambience_ui_visual_random_start:
+    name: HomeHub Ambience Visual Random Start
+    icon: mdi:shuffle-variant
+    initial: true
+
+  homehub_media_ambience_ui_soundtrack_loop:
+    name: HomeHub Ambience Soundtrack Loop
+    icon: mdi:repeat
+    initial: true
+
+  homehub_media_ambience_ui_soundtrack_random_start:
+    name: HomeHub Ambience Soundtrack Random Start
+    icon: mdi:shuffle-variant
+    initial: true
+
+input_number:
+  homehub_media_ambience_ui_original_volume:
+    name: HomeHub Ambience Original Volume
+    icon: mdi:volume-medium
+    min: 0
+    max: 100
+    step: 1
+    mode: slider
+    unit_of_measurement: "%"
+    initial: 20
+
+  homehub_media_ambience_ui_soundtrack_volume:
+    name: HomeHub Ambience Soundtrack Volume
+    icon: mdi:music-note
+    min: 0
+    max: 100
+    step: 1
+    mode: slider
+    unit_of_measurement: "%"
+    initial: 100
+
+# Single UI mixer. The two underlying input_number helpers remain available
+# for backend profiles, debugging, and future extensions.
+#
+# Mix meaning:
+#   0%   = 100% original ambience / 0% soundtrack
+#   50%  = 50% original ambience / 50% soundtrack
+#   100% = 0% original ambience / 100% soundtrack
+template:
+  - number:
+      - name: HomeHub Ambience Audio Mix
+        unique_id: homehub_ambience_audio_mix
+        icon: mdi:tune-vertical
+        unit_of_measurement: "%"
+        min: 0
+        max: 100
+        step: 1
+        state: >-
+          {% set original = states('input_number.homehub_media_ambience_ui_original_volume') | float(0) %}
+          {% set soundtrack = states('input_number.homehub_media_ambience_ui_soundtrack_volume') | float(0) %}
+          {% set total = original + soundtrack %}
+          {{ ((100 * soundtrack / total) if total > 0 else 50) | round(0) }}
+        set_value:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.homehub_media_ambience_ui_original_volume
+            data:
+              value: "{{ 100 - (value | float(50)) }}"
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.homehub_media_ambience_ui_soundtrack_volume
+            data:
+              value: "{{ value | float(50) }}"
+
+# Existing entity IDs are retained so the owner-fixed view becomes functional
+# immediately, even before its button actions are migrated from input buttons
+# to direct script calls.
+input_button:
+  homehub_media_ambience_ui_refresh_placeholder:
+    name: HomeHub Ambience Refresh Catalog
+    icon: mdi:refresh
+
+  homehub_media_ambience_ui_save_placeholder:
+    name: HomeHub Ambience Save Default
+    icon: mdi:content-save-star-outline
+
+  homehub_media_ambience_ui_start_placeholder:
+    name: HomeHub Ambience Start or Apply
+    icon: mdi:play
+
+script:
+  # -----------------------------------------------------------------------
+  # Create only missing configurable-mode profiles. Existing owner-saved
+  # defaults are never overwritten.
+  # -----------------------------------------------------------------------
+  homehub_media_ambience_ui_initialize_profiles:
+    alias: HomeHub Ambience UI · Initialize Missing Profiles
+    description: Creates only missing configurable profiles using IDs that are present in the synchronized live catalog.
+    icon: mdi:database-plus-outline
+    mode: single
+    sequence:
+      - variables:
+          live_visual_options: >-
+            {% set ns = namespace(items=[]) %}
+            {% for option in state_attr('input_select.homehub_media_ambience_ui_visual', 'options') or [] %}
+              {% if option != 'No visual' %}
+                {% set ns.items = ns.items + [option] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.items }}
+          live_soundtrack_options: >-
+            {% set ns = namespace(items=[]) %}
+            {% for option in state_attr('input_select.homehub_media_ambience_ui_soundtrack', 'options') or [] %}
+              {% if option != 'No soundtrack' %}
+                {% set ns.items = ns.items + [option] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.items }}
+          fallback_visual: >-
+            {{ live_visual_options[0] if (live_visual_options | length) > 0 else '' }}
+          fallback_soundtrack: >-
+            {{ live_soundtrack_options[0] if (live_soundtrack_options | length) > 0 else '' }}
+          preferred_soundtrack: >-
+            {{ 'mozart_rondo_k511'
+               if 'mozart_rondo_k511' in live_soundtrack_options
+               else fallback_soundtrack }}
+
+      - repeat:
+          for_each:
+            - profile_id: dinner
+              preferred_visual: aquarium
+            - profile_id: reading
+              preferred_visual: hogwarts
+            - profile_id: game_night
+              preferred_visual: abstract
+            - profile_id: chill
+              preferred_visual: rain
+          sequence:
+            - action: rest_command.homehub_ambient_player_profile_get
+              continue_on_error: true
+              data:
+                profile_id: "{{ repeat.item.profile_id }}"
+              response_variable: profile_check
+
+            # Only a truly missing profile (409) is initialized. A stale
+            # available:false profile is deliberately NOT overwritten.
+            - if:
+                - condition: template
+                  value_template: >-
+                    {{ profile_check is defined
+                       and profile_check.get('status', 0) == 409 }}
+              then:
+                - variables:
+                    selected_visual: >-
+                      {{ repeat.item.preferred_visual
+                         if repeat.item.preferred_visual in live_visual_options
+                         else fallback_visual }}
+                    selected_soundtrack: "{{ preferred_soundtrack }}"
+                    default_body: >-
+                      {{ {
+                        'visual': selected_visual if (selected_visual | length) > 0 else none,
+                        'visual_enabled': (selected_visual | length) > 0,
+                        'video_loop': true,
+                        'video_random_start': true,
+                        'original_volume': 20,
+                        'soundtrack': selected_soundtrack if (selected_soundtrack | length) > 0 else none,
+                        'soundtrack_loop': true,
+                        'soundtrack_random_start': true,
+                        'soundtrack_volume': 100
+                      } | to_json }}
+                - action: rest_command.homehub_ambient_player_profile_save
+                  continue_on_error: true
+                  data:
+                    profile_id: "{{ repeat.item.profile_id }}"
+                    body: "{{ default_body }}"
+                  response_variable: profile_create
+                - if:
+                    - condition: template
+                      value_template: >-
+                        {% set status = profile_create.get('status', 0)
+                           if profile_create is defined else 0 %}
+                        {{ status < 200 or status >= 300 }}
+                  then:
+                    - stop: "Could not create an initial ambience profile"
+                      error: true
+
+  # -----------------------------------------------------------------------
+  # Fast catalog sync (no disk rescan). Favorites sort first; stable IDs are
+  # stored in the selectors so playback never depends on a display title.
+  # -----------------------------------------------------------------------
+  homehub_media_ambience_ui_sync_catalog:
+    alias: HomeHub Ambience UI · Sync Catalog
+    description: Loads current backend catalog IDs into the visual and soundtrack selectors.
+    icon: mdi:database-sync-outline
+    mode: restart
+    sequence:
+      - variables:
+          old_visual: "{{ states('input_select.homehub_media_ambience_ui_visual') }}"
+          old_soundtrack: "{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}"
+      - action: rest_command.homehub_ambient_player_catalog
+        continue_on_error: true
+        response_variable: catalog_response
+      - if:
+          - condition: template
+            value_template: >-
+              {% set status = catalog_response.get('status', 0)
+                 if catalog_response is defined else 0 %}
+              {{ status < 200 or status >= 300 }}
+        then:
+          - stop: "Ambient catalog is unavailable"
+            error: true
+      - variables:
+          catalog_content: "{{ catalog_response.get('content', {}) }}"
+          visual_options: >-
+            {% set ns = namespace(favorites=[], others=[]) %}
+            {% for item in catalog_content.get('visuals', []) %}
+              {% if item.get('favorite', false) %}
+                {% set ns.favorites = ns.favorites + [item.get('id')] %}
+              {% else %}
+                {% set ns.others = ns.others + [item.get('id')] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.favorites + ns.others + ['No visual'] }}
+          soundtrack_options: >-
+            {% set ns = namespace(favorites=[], others=[]) %}
+            {% for item in catalog_content.get('soundtracks', []) %}
+              {% if item.get('favorite', false) %}
+                {% set ns.favorites = ns.favorites + [item.get('id')] %}
+              {% else %}
+                {% set ns.others = ns.others + [item.get('id')] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.favorites + ns.others + ['No soundtrack'] }}
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_visual
+        data:
+          options: "{{ visual_options }}"
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_soundtrack
+        data:
+          options: "{{ soundtrack_options }}"
+      - if:
+          - condition: template
+            value_template: "{{ old_visual in visual_options }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_visual
+            data:
+              option: "{{ old_visual }}"
+        else:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_visual
+            data:
+              option: "{{ visual_options[0] }}"
+      - if:
+          - condition: template
+            value_template: "{{ old_soundtrack in soundtrack_options }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_soundtrack
+            data:
+              option: "{{ old_soundtrack }}"
+        else:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_soundtrack
+            data:
+              option: "{{ soundtrack_options[0] }}"
+      - action: script.homehub_media_ambience_ui_sync_favorites
+
+  # Refresh performs the backend disk scan, then applies the returned catalog.
+  homehub_media_ambience_ui_refresh_catalog:
+    alias: HomeHub Ambience UI · Refresh Catalog
+    description: Rescans the host media folders and updates both selectors, favorites first.
+    icon: mdi:refresh
+    mode: restart
+    sequence:
+      - variables:
+          old_visual: "{{ states('input_select.homehub_media_ambience_ui_visual') }}"
+          old_soundtrack: "{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}"
+      - action: rest_command.homehub_ambient_player_catalog_refresh
+        continue_on_error: true
+        response_variable: catalog_response
+      - if:
+          - condition: template
+            value_template: >-
+              {% set status = catalog_response.get('status', 0)
+                 if catalog_response is defined else 0 %}
+              {{ status < 200 or status >= 300 }}
+        then:
+          - stop: "Ambient catalog refresh failed"
+            error: true
+      - variables:
+          catalog_content: "{{ catalog_response.get('content', {}) }}"
+          visual_options: >-
+            {% set ns = namespace(favorites=[], others=[]) %}
+            {% for item in catalog_content.get('visuals', []) %}
+              {% if item.get('favorite', false) %}
+                {% set ns.favorites = ns.favorites + [item.get('id')] %}
+              {% else %}
+                {% set ns.others = ns.others + [item.get('id')] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.favorites + ns.others + ['No visual'] }}
+          soundtrack_options: >-
+            {% set ns = namespace(favorites=[], others=[]) %}
+            {% for item in catalog_content.get('soundtracks', []) %}
+              {% if item.get('favorite', false) %}
+                {% set ns.favorites = ns.favorites + [item.get('id')] %}
+              {% else %}
+                {% set ns.others = ns.others + [item.get('id')] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.favorites + ns.others + ['No soundtrack'] }}
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_visual
+        data:
+          options: "{{ visual_options }}"
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_soundtrack
+        data:
+          options: "{{ soundtrack_options }}"
+      - if:
+          - condition: template
+            value_template: "{{ old_visual in visual_options }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_visual
+            data:
+              option: "{{ old_visual }}"
+        else:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_visual
+            data:
+              option: "{{ visual_options[0] }}"
+      - if:
+          - condition: template
+            value_template: "{{ old_soundtrack in soundtrack_options }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_soundtrack
+            data:
+              option: "{{ old_soundtrack }}"
+        else:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_soundtrack
+            data:
+              option: "{{ soundtrack_options[0] }}"
+      - action: script.homehub_media_ambience_ui_sync_favorites
+
+  homehub_media_ambience_ui_sync_favorites:
+    alias: HomeHub Ambience UI · Sync Favorite Indicators
+    description: Publishes the backend's dynamic visual and soundtrack favorite ID sets for the catalog-driven frontend card.
+    icon: mdi:star-sync-outline
+    mode: restart
+    sequence:
+      - action: rest_command.homehub_ambient_player_catalog
+        continue_on_error: true
+        response_variable: favorite_catalog_response
+
+      - if:
+          - condition: template
+            value_template: >-
+              {% set status = favorite_catalog_response.get('status', 0)
+                 if favorite_catalog_response is defined else 0 %}
+              {{ status < 200 or status >= 300 }}
+        then:
+          - stop: "Ambient catalog is unavailable"
+            error: true
+
+      - variables:
+          favorite_catalog: "{{ favorite_catalog_response.get('content', {}) }}"
+          visual_favorite_ids: >-
+            {% set ns = namespace(ids=[]) %}
+            {% for item in favorite_catalog.get('visuals', []) %}
+              {% if item.get('favorite', false) %}
+                {% set ns.ids = ns.ids + [item.get('id')] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.ids }}
+          soundtrack_favorite_ids: >-
+            {% set ns = namespace(ids=[]) %}
+            {% for item in favorite_catalog.get('soundtracks', []) %}
+              {% if item.get('favorite', false) %}
+                {% set ns.ids = ns.ids + [item.get('id')] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.ids }}
+
+      # These two dynamic input_select option lists are the only favorite state
+      # consumed by the v2.0 catalog-driven media card.
+      #
+      # IMPORTANT: do not write the legacy per-media favorite input_booleans
+      # here. Doing so triggers old mirror automations that write the value back
+      # to the backend while this sync is still running, creating a feedback
+      # loop/restart storm.
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_visual_favorites
+        data:
+          options: >-
+            {{ visual_favorite_ids if (visual_favorite_ids | length) > 0
+               else ['No favorites'] }}
+
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_soundtrack_favorites
+        data:
+          options: >-
+            {{ soundtrack_favorite_ids if (soundtrack_favorite_ids | length) > 0
+               else ['No favorites'] }}
+
+  homehub_media_ambience_ui_load_mode:
+    alias: HomeHub Ambience UI · Load Saved Mode
+    description: Loads a saved backend profile into the composer helpers.
+    icon: mdi:folder-open-outline
+    mode: restart
+    fields:
+      mode:
+        name: Mode
+        required: true
+        selector:
+          select:
+            options: [Fireplace, Dinner, Reading, Game Night, Chill]
+    sequence:
+      - variables:
+          profile_id: >-
+            {{ {'Fireplace':'fireplace','Dinner':'dinner','Reading':'reading',
+                'Game Night':'game_night','Chill':'chill'}.get(mode | default('', true), '') }}
+      - if:
+          - condition: template
+            value_template: "{{ profile_id == '' }}"
+        then:
+          - stop: "Unsupported ambience editor mode"
+            error: true
+      - action: rest_command.homehub_ambient_player_profile_get
+        continue_on_error: true
+        data:
+          profile_id: "{{ profile_id }}"
+        response_variable: profile_response
+      - if:
+          - condition: template
+            value_template: >-
+              {% set status = profile_response.get('status', 0)
+                 if profile_response is defined else 0 %}
+              {{ status < 200 or status >= 300 }}
+        then:
+          - stop: "Saved ambience profile is unavailable"
+            error: true
+      - variables:
+          profile_content: "{{ profile_response.get('content', {}) }}"
+
+      - if:
+          - condition: template
+            value_template: >-
+              {{ profile_content.get('available', true) == false }}
+        then:
+          - stop: >-
+              Saved ambience profile is unavailable: {{ profile_content.get('error', 'stale or missing media') }}
+            error: true
+
+      - variables:
+          profile: "{{ profile_content.get('profile', {}) }}"
+          profile_visual: "{{ profile.get('visual') or 'No visual' }}"
+          profile_soundtrack: "{{ profile.get('soundtrack') or 'No soundtrack' }}"
+          current_visual_options: >-
+            {{ state_attr('input_select.homehub_media_ambience_ui_visual', 'options') or ['No visual'] }}
+          current_soundtrack_options: >-
+            {{ state_attr('input_select.homehub_media_ambience_ui_soundtrack', 'options') or ['No soundtrack'] }}
+
+      - if:
+          - condition: template
+            value_template: >-
+              {{ profile_visual not in current_visual_options
+                 or profile_soundtrack not in current_soundtrack_options }}
+        then:
+          - stop: "Saved ambience profile references media that is not in the current synchronized catalog"
+            error: true
+
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_visual
+        data:
+          option: "{{ profile_visual }}"
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_soundtrack
+        data:
+          option: "{{ profile_soundtrack }}"
+      - if:
+          - condition: template
+            value_template: "{{ profile.get('visual_enabled', false) }}"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_visual_enabled
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_visual_enabled
+      - if:
+          - condition: template
+            value_template: "{{ profile.get('video_loop', true) }}"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_visual_loop
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_visual_loop
+      - if:
+          - condition: template
+            value_template: "{{ profile.get('video_random_start', true) }}"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_visual_random_start
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_visual_random_start
+      - if:
+          - condition: template
+            value_template: "{{ profile.get('soundtrack_loop', true) }}"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_soundtrack_loop
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_soundtrack_loop
+      - if:
+          - condition: template
+            value_template: "{{ profile.get('soundtrack_random_start', true) }}"
+        then:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_soundtrack_random_start
+        else:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_soundtrack_random_start
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.homehub_media_ambience_ui_original_volume
+        data:
+          value: "{{ profile.get('original_volume', 20) | float(20) }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.homehub_media_ambience_ui_soundtrack_volume
+        data:
+          value: "{{ profile.get('soundtrack_volume', 100) | float(100) }}"
+
+  homehub_media_ambience_ui_tile_toggle:
+    alias: HomeHub Ambience UI · Configurable Mode Tile Toggle
+    description: Starts the open mode with current unsaved composer settings; otherwise preserves the normal mode tile wrapper behavior.
+    icon: mdi:gesture-tap-button
+    mode: restart
+    fields:
+      mode:
+        name: Mode
+        required: true
+        selector:
+          select:
+            options: [Dinner, Reading, Game Night, Chill]
+    sequence:
+      - variables:
+          requested_mode: "{{ mode | default('', true) }}"
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          mode_is_active: >-
+            {{ requested_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', requested_mode) }}
+      - if:
+          - condition: template
+            value_template: "{{ requested_mode not in ['Dinner','Reading','Game Night','Chill'] }}"
+        then:
+          - stop: "Unsupported configurable ambience mode"
+            error: true
+      - choose:
+          # When this exact editor is open and the mode is currently OFF,
+          # the main tile starts the CURRENT UNSAVED composer state.
+          - conditions: "{{ editor_mode == requested_mode and not mode_is_active }}"
+            sequence:
+              - action: script.homehub_media_ambience_ui_start
+
+          # Otherwise preserve each existing authoritative wrapper. This keeps
+          # normal saved-profile starts and active-mode stop/toggle behavior.
+          - conditions: "{{ requested_mode == 'Dinner' }}"
+            sequence:
+              - action: script.homehub_media_ambience_dinner
+          - conditions: "{{ requested_mode == 'Reading' }}"
+            sequence:
+              - action: script.homehub_media_ambience_reading
+          - conditions: "{{ requested_mode == 'Game Night' }}"
+            sequence:
+              - action: script.homehub_media_ambience_game_night
+          - conditions: "{{ requested_mode == 'Chill' }}"
+            sequence:
+              - action: script.homehub_media_ambience_chill
+
+  homehub_media_ambience_ui_toggle_editor:
+    alias: HomeHub Ambience UI · Toggle Editor
+    description: Opens one composer, synchronizes the catalog, and loads that mode's saved profile.
+    icon: mdi:tune-variant
+    mode: restart
+    fields:
+      mode:
+        name: Mode
+        required: true
+        selector:
+          select:
+            options: [Fireplace, Dinner, Reading, Game Night, Chill]
+    sequence:
+      - variables:
+          requested_mode: "{{ mode | default('', true) }}"
+          allowed_modes: [Fireplace, Dinner, Reading, Game Night, Chill]
+          current_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+      - if:
+          - condition: template
+            value_template: "{{ requested_mode not in allowed_modes }}"
+        then:
+          - stop: "Unsupported ambience editor mode"
+            error: true
+      - if:
+          - condition: template
+            value_template: "{{ current_mode == requested_mode }}"
+        then:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_editor_mode
+            data:
+              option: Closed
+        else:
+          - action: input_select.select_option
+            target:
+              entity_id: input_select.homehub_media_ambience_ui_editor_mode
+            data:
+              option: "{{ requested_mode }}"
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ requested_mode in ['Dinner','Reading','Game Night','Chill']
+                     and not (
+                       is_state('input_boolean.homehub_media_room_scene_active', 'on')
+                       and is_state('input_select.homehub_media_ambience_mode', requested_mode)
+                     ) }}
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.homehub_media_ambience_ui_lighting_enabled
+          - action: script.homehub_media_ambience_ui_sync_catalog
+          - action: script.homehub_media_ambience_ui_initialize_profiles
+          - action: script.homehub_media_ambience_ui_load_mode
+            data:
+              mode: "{{ requested_mode }}"
+
+  homehub_media_ambience_ui_toggle_lighting:
+    alias: HomeHub Ambience UI · Toggle Lighting Preset
+    description: Enables/disables only the current configurable mode's lighting preset. Disabling restores the pre-mode room snapshot while media keeps playing.
+    icon: mdi:lightbulb-group-outline
+    mode: restart
+    sequence:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          lighting_is_on: "{{ is_state('input_boolean.homehub_media_ambience_ui_lighting_enabled', 'on') }}"
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+      - if:
+          - condition: template
+            value_template: "{{ editor_mode not in ['Dinner','Reading','Game Night','Chill'] }}"
+        then:
+          - stop: "Lighting preset toggle is available only for configurable ambience modes"
+            error: true
+
+      - choose:
+          # ON -> OFF: restore the exact room snapshot captured when the mode
+          # started, but deliberately keep the ambience mode and media active.
+          - conditions: "{{ lighting_is_on }}"
+            sequence:
+              - action: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.homehub_media_ambience_ui_lighting_enabled
+              - if:
+                  - condition: template
+                    value_template: "{{ mode_is_active }}"
+                then:
+                  - action: script.homehub_media_room_scene_restore_snapshot
+
+        # OFF -> ON: re-apply only the current mode lighting preset. Do not
+        # replace the stored restore snapshot and do not restart media.
+        default:
+          - if:
+              - condition: state
+                entity_id: input_boolean.homehub_night_mode
+                state: "on"
+            then:
+              - action: input_boolean.turn_on
+                continue_on_error: true
+                target:
+                  entity_id: input_boolean.homehub_media_blocked_by_night
+              - stop: "Night Mode is active; ambience lighting was not enabled"
+
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_lighting_enabled
+          - if:
+              - condition: template
+                value_template: "{{ mode_is_active }}"
+            then:
+              - action: script.homehub_media_room_scene_apply_preset
+                data:
+                  room_mode: "{{ editor_mode }}"
+
+  homehub_media_ambience_ui_save_default:
+    alias: HomeHub Ambience UI · Save Mode Default
+    description: Saves the current composer choices as the selected mode's persistent backend profile.
+    icon: mdi:content-save-star-outline
+    mode: restart
+    sequence:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          profile_id: >-
+            {{ {'Fireplace':'fireplace','Dinner':'dinner','Reading':'reading',
+                'Game Night':'game_night','Chill':'chill'}.get(editor_mode, '') }}
+          selected_visual: >-
+            {% if editor_mode == 'Fireplace' %}fireplace
+            {% else %}{{ states('input_select.homehub_media_ambience_ui_visual') }}{% endif %}
+          selected_soundtrack: >-
+            {% if editor_mode == 'Fireplace' %}No soundtrack
+            {% else %}{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}{% endif %}
+          use_visual: >-
+            {{ is_state('input_boolean.homehub_media_ambience_ui_visual_enabled', 'on')
+               and selected_visual != 'No visual' }}
+          profile_body: >-
+            {{ {
+              'visual': selected_visual if use_visual else none,
+              'visual_enabled': use_visual,
+              'video_loop': is_state('input_boolean.homehub_media_ambience_ui_visual_loop', 'on'),
+              'video_random_start': is_state('input_boolean.homehub_media_ambience_ui_visual_random_start', 'on'),
+              'original_volume': states('input_number.homehub_media_ambience_ui_original_volume') | float(20),
+              'soundtrack': selected_soundtrack if selected_soundtrack != 'No soundtrack' else none,
+              'soundtrack_loop': is_state('input_boolean.homehub_media_ambience_ui_soundtrack_loop', 'on'),
+              'soundtrack_random_start': is_state('input_boolean.homehub_media_ambience_ui_soundtrack_random_start', 'on'),
+              'soundtrack_volume': states('input_number.homehub_media_ambience_ui_soundtrack_volume') | float(100)
+            } | to_json }}
+      - if:
+          - condition: template
+            value_template: "{{ profile_id == '' }}"
+        then:
+          - stop: "Open an editable ambience mode before saving"
+            error: true
+      - action: rest_command.homehub_ambient_player_profile_save
+        continue_on_error: true
+        data:
+          profile_id: "{{ profile_id }}"
+          body: "{{ profile_body }}"
+        response_variable: save_response
+      - if:
+          - condition: template
+            value_template: >-
+              {% set status = save_response.get('status', 0)
+                 if save_response is defined else 0 %}
+              {{ status < 200 or status >= 300 }}
+        then:
+          - stop: "Could not save the ambience profile"
+            error: true
+
+  homehub_media_ambience_ui_start:
+    alias: HomeHub Ambience UI · Start or Apply
+    description: Establishes the selected mode lighting and applies the current unsaved dual-layer composition.
+    icon: mdi:play
+    mode: restart
+    sequence:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          selected_visual: >-
+            {% if editor_mode == 'Fireplace' %}fireplace
+            {% else %}{{ states('input_select.homehub_media_ambience_ui_visual') }}{% endif %}
+          selected_soundtrack: >-
+            {% if editor_mode == 'Fireplace' %}No soundtrack
+            {% else %}{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}{% endif %}
+          use_visual: >-
+            {{ is_state('input_boolean.homehub_media_ambience_ui_visual_enabled', 'on')
+               and selected_visual != 'No visual' }}
+          use_lighting: >-
+            {{ editor_mode == 'Fireplace'
+               or is_state('input_boolean.homehub_media_ambience_ui_lighting_enabled', 'on') }}
+          mode_is_active: >-
+            {% if editor_mode == 'Fireplace' %}
+              {{ is_state('input_boolean.homehub_media_fireplace_active', 'on') }}
+            {% else %}
+              {{ is_state('input_boolean.homehub_media_room_scene_active', 'on')
+                 and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+            {% endif %}
+      - if:
+          - condition: template
+            value_template: "{{ editor_mode not in ['Fireplace','Dinner','Reading','Game Night','Chill'] }}"
+        then:
+          - stop: "Open an editable ambience mode before starting"
+            error: true
+
+      # The controller wrappers remain the sole owners of light setup. The
+      # skip_media field prevents a saved profile from starting before this
+      # unsaved composition and preserves No Visual semantics.
+      - if:
+          - condition: template
+            value_template: "{{ not mode_is_active }}"
+        then:
+          - choose:
+              - conditions: "{{ editor_mode == 'Fireplace' }}"
+                sequence:
+                  - action: script.homehub_media_ambience_fireplace
+                    data:
+                      skip_media: true
+              - conditions: "{{ editor_mode == 'Dinner' }}"
+                sequence:
+                  - action: script.homehub_media_ambience_dinner
+                    data:
+                      skip_media: true
+                      apply_lighting: "{{ use_lighting }}"
+              - conditions: "{{ editor_mode == 'Reading' }}"
+                sequence:
+                  - action: script.homehub_media_ambience_reading
+                    data:
+                      skip_media: true
+                      apply_lighting: "{{ use_lighting }}"
+              - conditions: "{{ editor_mode == 'Game Night' }}"
+                sequence:
+                  - action: script.homehub_media_ambience_game_night
+                    data:
+                      skip_media: true
+                      apply_lighting: "{{ use_lighting }}"
+              - conditions: "{{ editor_mode == 'Chill' }}"
+                sequence:
+                  - action: script.homehub_media_ambience_chill
+                    data:
+                      skip_media: true
+                      apply_lighting: "{{ use_lighting }}"
+
+      - action: script.homehub_ambient_host_compose
+        data:
+          visual: "{{ selected_visual }}"
+          visual_enabled: "{{ use_visual }}"
+          video_loop: "{{ is_state('input_boolean.homehub_media_ambience_ui_visual_loop', 'on') }}"
+          video_random_start: "{{ is_state('input_boolean.homehub_media_ambience_ui_visual_random_start', 'on') }}"
+          original_volume: "{{ (states('input_number.homehub_media_ambience_ui_original_volume') | float(20)) if is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on') else 0 }}"
+          soundtrack: "{{ selected_soundtrack if is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on') else 'No soundtrack' }}"
+          soundtrack_loop: "{{ is_state('input_boolean.homehub_media_ambience_ui_soundtrack_loop', 'on') }}"
+          soundtrack_random_start: "{{ is_state('input_boolean.homehub_media_ambience_ui_soundtrack_random_start', 'on') }}"
+          soundtrack_volume: "{{ (states('input_number.homehub_media_ambience_ui_soundtrack_volume') | float(100)) if is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on') else 0 }}"
+
+  homehub_media_ambience_ui_apply_live_mix:
+    alias: HomeHub Ambience UI · Apply Live Audio Mix
+    description: Applies MPV volume properties without restarting either media layer, lighting, or HDMI routing.
+    icon: mdi:tune-vertical
+    mode: restart
+    max_exceeded: silent
+    sequence:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+      - condition: template
+        value_template: "{{ mode_is_active }}"
+      - action: script.homehub_ambient_host_update_volumes
+        data:
+          original_volume: >-
+            {{ states('input_number.homehub_media_ambience_ui_original_volume') | float(20) }}
+          soundtrack_volume: >-
+            {{ states('input_number.homehub_media_ambience_ui_soundtrack_volume') | float(100) }}
+
+  homehub_media_ambience_ui_no_visual:
+    alias: HomeHub Ambience UI · No Visual
+    icon: mdi:television-off
+    mode: restart
+    sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_visual
+        data:
+          option: No visual
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.homehub_media_ambience_ui_visual_enabled
+
+  homehub_media_ambience_ui_toggle_audio:
+    alias: HomeHub Ambience UI · Toggle Global Audio
+    description: Toggles both original ambience audio and the independent soundtrack while preserving both volume slider values.
+    icon: mdi:music-note
+    mode: restart
+    sequence:
+      - variables:
+          audio_is_on: "{{ is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on') }}"
+          selected_soundtrack: "{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}"
+          first_available_soundtrack: >-
+            {% set ns = namespace(value='') %}
+            {% for option in state_attr('input_select.homehub_media_ambience_ui_soundtrack', 'options') or [] %}
+              {% if option != 'No soundtrack' and ns.value == '' %}
+                {% set ns.value = option %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.value }}
+      - if:
+          - condition: template
+            value_template: "{{ audio_is_on }}"
+        then:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_audio_enabled
+        else:
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ selected_soundtrack == 'No soundtrack'
+                     and first_available_soundtrack != '' }}
+            then:
+              - action: input_select.select_option
+                target:
+                  entity_id: input_select.homehub_media_ambience_ui_soundtrack
+                data:
+                  option: "{{ first_available_soundtrack }}"
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_audio_enabled
+
+  homehub_media_ambience_ui_toggle_soundtrack_favorite:
+    alias: HomeHub Ambience UI · Toggle Soundtrack Favorite
+    description: Toggles one soundtrack card's backend favorite and refreshes its per-card indicator.
+    icon: mdi:star-cog-outline
+    mode: queued
+    max: 4
+    fields:
+      media_id:
+        required: true
+        selector:
+          text:
+      favorite_entity:
+        required: true
+        selector:
+          entity:
+            domain: input_boolean
+    sequence:
+      - condition: template
+        value_template: >-
+          {{ media_id | default('', true) in ['mozart_rondo_k511']
+             and favorite_entity | default('', true) in
+             ['input_boolean.homehub_media_ambience_ui_soundtrack_favorite_mozart_rondo_k511'] }}
+      - variables:
+          desired_favorite: "{{ not is_state(favorite_entity, 'on') }}"
+      - action: script.homehub_media_ambience_ui_set_favorite
+        data:
+          media_kind: soundtrack
+          media_id: "{{ media_id }}"
+          favorite: "{{ desired_favorite }}"
+      - action: script.homehub_media_ambience_ui_sync_favorites
+
+  homehub_media_ambience_ui_no_soundtrack:
+    alias: HomeHub Ambience UI · No Soundtrack
+    icon: mdi:music-off
+    mode: restart
+    sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_soundtrack
+        data:
+          option: No soundtrack
+
+  homehub_media_ambience_ui_toggle_visual_favorite:
+    alias: HomeHub Ambience UI · Toggle Visual Favorite
+    description: Toggles one carousel visual's backend favorite and then refreshes all per-card favorite indicators.
+    icon: mdi:star-cog-outline
+    mode: queued
+    max: 4
+    fields:
+      media_id:
+        required: true
+        selector:
+          text:
+      favorite_entity:
+        required: true
+        selector:
+          entity:
+            domain: input_boolean
+    sequence:
+      - condition: template
+        value_template: >-
+          {{ media_id | default('', true) in
+             ['aquarium','abstract','fireplace','hogwarts','rain','ocean','space','dog_tv']
+             and favorite_entity | default('', true) in
+             ['input_boolean.homehub_media_ambience_ui_visual_favorite_aquarium',
+              'input_boolean.homehub_media_ambience_ui_visual_favorite_abstract',
+              'input_boolean.homehub_media_ambience_ui_visual_favorite_fireplace',
+              'input_boolean.homehub_media_ambience_ui_visual_favorite_hogwarts',
+              'input_boolean.homehub_media_ambience_ui_visual_favorite_rain',
+              'input_boolean.homehub_media_ambience_ui_visual_favorite_ocean',
+              'input_boolean.homehub_media_ambience_ui_visual_favorite_space',
+              'input_boolean.homehub_media_ambience_ui_visual_favorite_dog_tv'] }}
+      - variables:
+          desired_favorite: "{{ not is_state(favorite_entity, 'on') }}"
+      - action: script.homehub_media_ambience_ui_set_favorite
+        data:
+          media_kind: video
+          media_id: "{{ media_id }}"
+          favorite: "{{ desired_favorite }}"
+      - action: script.homehub_media_ambience_ui_sync_favorites
+
+  homehub_media_ambience_ui_toggle_media_favorite:
+    alias: HomeHub Ambience UI · Toggle Any Media Favorite
+    description: Toggles an arbitrary catalog video or soundtrack favorite without per-media HA helpers.
+    icon: mdi:star-cog-outline
+    mode: queued
+    max: 8
+    fields:
+      media_kind:
+        name: Media kind
+        required: true
+        selector:
+          select:
+            options: [video, soundtrack]
+      media_id:
+        name: Media ID
+        required: true
+        selector:
+          text:
+    sequence:
+      - variables:
+          safe_kind: "{{ media_kind | default('', true) }}"
+          safe_id: "{{ media_id | default('', true) }}"
+          favorites_entity: >-
+            {{ 'input_select.homehub_media_ambience_ui_visual_favorites'
+               if safe_kind == 'video'
+               else 'input_select.homehub_media_ambience_ui_soundtrack_favorites' }}
+          current_favorites: "{{ state_attr(favorites_entity, 'options') or [] }}"
+          desired_favorite: "{{ safe_id not in current_favorites }}"
+      - condition: template
+        value_template: >-
+          {{ safe_kind in ['video','soundtrack']
+             and safe_id not in ['', 'No visual', 'No soundtrack', 'No favorites'] }}
+      - action: script.homehub_media_ambience_ui_set_favorite
+        data:
+          media_kind: "{{ safe_kind }}"
+          media_id: "{{ safe_id }}"
+          favorite: "{{ desired_favorite }}"
+      - action: script.homehub_media_ambience_ui_sync_favorites
+
+  homehub_media_ambience_ui_set_favorite:
+    alias: HomeHub Ambience UI · Set Favorite
+    icon: mdi:star-cog-outline
+    mode: parallel
+    max: 2
+    fields:
+      media_kind:
+        required: true
+        selector:
+          select:
+            options: [video, soundtrack]
+      media_id:
+        required: true
+        selector:
+          text:
+      favorite:
+        required: true
+        selector:
+          boolean:
+    sequence:
+      - condition: template
+        value_template: >-
+          {{ media_kind in ['video','soundtrack']
+             and media_id | default('', true) not in ['', 'No visual', 'No soundtrack'] }}
+      - action: rest_command.homehub_ambient_player_favorite
+        continue_on_error: true
+        data:
+          media_kind: "{{ media_kind }}"
+          media_id: "{{ media_id }}"
+          favorite: "{{ favorite | bool }}"
+        response_variable: favorite_response
+      - if:
+          - condition: template
+            value_template: >-
+              {% set status = favorite_response.get('status', 0)
+                 if favorite_response is defined else 0 %}
+              {{ status < 200 or status >= 300 }}
+        then:
+          - stop: "Could not update the catalog favorite"
+            error: true
+
+automation:
+  - id: homehub_ambience_ui_close_editor_outside_ambience
+    alias: HomeHub Ambience UI · Close Editor Outside Ambience
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_select.homehub_media_remote_target
+    conditions:
+      - condition: template
+        value_template: >-
+          {{ trigger.to_state is not none
+             and trigger.to_state.state != 'Ambience'
+             and not is_state('input_select.homehub_media_ambience_ui_editor_mode', 'Closed') }}
+    actions:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.homehub_media_ambience_ui_editor_mode
+        data:
+          option: Closed
+
+  - id: homehub_ambience_ui_refresh_button
+    alias: HomeHub Ambience UI · Refresh Button
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_button.homehub_media_ambience_ui_refresh_placeholder
+    actions:
+      - action: script.homehub_media_ambience_ui_refresh_catalog
+
+  - id: homehub_ambience_ui_save_button
+    alias: HomeHub Ambience UI · Save Button
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_button.homehub_media_ambience_ui_save_placeholder
+    actions:
+      - action: script.homehub_media_ambience_ui_save_default
+
+  - id: homehub_ambience_ui_start_button
+    alias: HomeHub Ambience UI · Start Button
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_button.homehub_media_ambience_ui_start_placeholder
+    actions:
+      - action: script.homehub_media_ambience_ui_start
+
+  - id: homehub_ambience_ui_visual_selection
+    alias: HomeHub Ambience UI · Visual Selection State
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_select.homehub_media_ambience_ui_visual
+    actions:
+      # "No visual" remains available internally, but selecting a normal
+      # carousel visual no longer forces the global Visual power back on.
+      - if:
+          - condition: state
+            entity_id: input_select.homehub_media_ambience_ui_visual
+            state: No visual
+        then:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.homehub_media_ambience_ui_visual_enabled
+
+
+      # A visual card tap changes only the live video layer. Browsing the
+      # carousel still does not change the selector or playback.
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          selected_visual: "{{ states('input_select.homehub_media_ambience_ui_visual') }}"
+          use_visual: >-
+            {{ is_state('input_boolean.homehub_media_ambience_ui_visual_enabled', 'on')
+               and selected_visual != 'No visual' }}
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+
+      - if:
+          - condition: template
+            value_template: "{{ mode_is_active }}"
+        then:
+          - action: script.homehub_ambient_host_update_visual
+            data:
+              visual: "{{ selected_visual }}"
+              enabled: "{{ use_visual }}"
+              loop: "{{ is_state('input_boolean.homehub_media_ambience_ui_visual_loop', 'on') }}"
+              random_start: "{{ is_state('input_boolean.homehub_media_ambience_ui_visual_random_start', 'on') }}"
+              volume: "{{ (states('input_number.homehub_media_ambience_ui_original_volume') | float(20)) if is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on') else 0 }}"
+
+  - id: homehub_ambience_ui_visual_enabled_apply
+    alias: HomeHub Ambience UI · Visual Power Apply
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.homehub_media_ambience_ui_visual_enabled
+    actions:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          selected_visual: "{{ states('input_select.homehub_media_ambience_ui_visual') }}"
+          use_visual: >-
+            {{ is_state('input_boolean.homehub_media_ambience_ui_visual_enabled', 'on')
+               and selected_visual != 'No visual' }}
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+      - if:
+          - condition: template
+            value_template: "{{ mode_is_active }}"
+        then:
+          - action: script.homehub_ambient_host_update_visual
+            data:
+              visual: "{{ selected_visual }}"
+              enabled: "{{ use_visual }}"
+              loop: "{{ is_state('input_boolean.homehub_media_ambience_ui_visual_loop', 'on') }}"
+              random_start: "{{ is_state('input_boolean.homehub_media_ambience_ui_visual_random_start', 'on') }}"
+              volume: "{{ (states('input_number.homehub_media_ambience_ui_original_volume') | float(20)) if is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on') else 0 }}"
+
+  - id: homehub_ambience_ui_live_audio_mix
+    alias: HomeHub Ambience UI · Live Audio Mix
+    description: Debounces mix slider movement and applies the final crossfade while the edited ambience is active.
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_number.homehub_media_ambience_ui_original_volume
+          - input_number.homehub_media_ambience_ui_soundtrack_volume
+    conditions:
+      - condition: state
+        entity_id: input_boolean.homehub_media_ambience_ui_audio_enabled
+        state: 'on'
+    actions:
+      - delay:
+          milliseconds: 200
+      - action: script.homehub_media_ambience_ui_apply_live_mix
+
+  - id: homehub_ambience_ui_visual_loop_apply
+    alias: HomeHub Ambience UI · Visual Loop Apply
+    description: Updates the running video loop property without restarting either MPV layer.
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.homehub_media_ambience_ui_visual_loop
+    actions:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          selected_visual: "{{ states('input_select.homehub_media_ambience_ui_visual') }}"
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+      - condition: template
+        value_template: >-
+          {{ mode_is_active
+             and is_state('input_boolean.homehub_media_ambience_ui_visual_enabled', 'on')
+             and selected_visual != 'No visual' }}
+      - action: script.homehub_ambient_host_update_visual_loop
+        data:
+          loop: "{{ trigger.to_state.state == 'on' }}"
+
+  - id: homehub_ambience_ui_soundtrack_loop_apply
+    alias: HomeHub Ambience UI · Soundtrack Loop Apply
+    description: Updates the running soundtrack loop property without restarting either MPV layer.
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.homehub_media_ambience_ui_soundtrack_loop
+    actions:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          selected_soundtrack: "{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}"
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+      - condition: template
+        value_template: >-
+          {{ mode_is_active
+             and is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on')
+             and selected_soundtrack != 'No soundtrack' }}
+      - action: script.homehub_ambient_host_update_soundtrack_loop
+        data:
+          loop: "{{ trigger.to_state.state == 'on' }}"
+
+  - id: homehub_ambience_ui_soundtrack_selection
+    alias: HomeHub Ambience UI · Soundtrack Selection State
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_select.homehub_media_ambience_ui_soundtrack
+    actions:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          selected_soundtrack: "{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}"
+          use_soundtrack: >-
+            {{ is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on')
+               and selected_soundtrack != 'No soundtrack' }}
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+      - if:
+          - condition: template
+            value_template: "{{ mode_is_active }}"
+        then:
+          - action: script.homehub_ambient_host_update_soundtrack
+            data:
+              soundtrack: "{{ selected_soundtrack }}"
+              enabled: "{{ use_soundtrack }}"
+              loop: "{{ is_state('input_boolean.homehub_media_ambience_ui_soundtrack_loop', 'on') }}"
+              random_start: "{{ is_state('input_boolean.homehub_media_ambience_ui_soundtrack_random_start', 'on') }}"
+              volume: "{{ states('input_number.homehub_media_ambience_ui_soundtrack_volume') | float(100) }}"
+
+  - id: homehub_ambience_ui_audio_enabled_apply
+    alias: HomeHub Ambience UI · Global Audio Apply
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.homehub_media_ambience_ui_audio_enabled
+    actions:
+      - variables:
+          editor_mode: "{{ states('input_select.homehub_media_ambience_ui_editor_mode') }}"
+          selected_soundtrack: "{{ states('input_select.homehub_media_ambience_ui_soundtrack') }}"
+          audio_is_on: "{{ is_state('input_boolean.homehub_media_ambience_ui_audio_enabled', 'on') }}"
+          mode_is_active: >-
+            {{ editor_mode in ['Dinner','Reading','Game Night','Chill']
+               and is_state('input_boolean.homehub_media_room_scene_active', 'on')
+               and is_state('input_select.homehub_media_ambience_mode', editor_mode) }}
+      - if:
+          - condition: template
+            value_template: "{{ mode_is_active }}"
+        then:
+          - action: script.homehub_ambient_host_update_audio
+            data:
+              audio_enabled: "{{ audio_is_on }}"
+              soundtrack: "{{ selected_soundtrack }}"
+              soundtrack_loop: "{{ is_state('input_boolean.homehub_media_ambience_ui_soundtrack_loop', 'on') }}"
+              soundtrack_random_start: "{{ is_state('input_boolean.homehub_media_ambience_ui_soundtrack_random_start', 'on') }}"
+              original_volume: "{{ (states('input_number.homehub_media_ambience_ui_original_volume') | float(20)) if audio_is_on else 0 }}"
+              soundtrack_volume: "{{ (states('input_number.homehub_media_ambience_ui_soundtrack_volume') | float(100)) if audio_is_on else 0 }}"
+
+  - id: homehub_ambience_ui_boot_sync
+    alias: HomeHub Ambience UI · Boot Sync
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - delay: "00:00:45"
+      # Catalog must be authoritative before any missing-profile defaults are
+      # considered. Neither action starts playback.
+      - action: script.homehub_media_ambience_ui_sync_catalog
+        continue_on_error: true
+      - action: script.homehub_media_ambience_ui_initialize_profiles
+        continue_on_error: true

@@ -1,0 +1,17 @@
+[Unit]
+Description=Home Hub Media Browser - REPLACE_APP_NAME
+After=graphical-session.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+ExecStart=YOUR_BROWSER_EXECUTABLE --new-window --kiosk --no-first-run YOUR_LOCAL_APP_URL
+KillMode=control-group
+Restart=no
+
+[Install]
+WantedBy=default.target

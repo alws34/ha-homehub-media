@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+node_modules/
+.DS_Store
+ubuntu/ambient-player/audio_only.ppm
