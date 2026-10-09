@@ -128,6 +128,17 @@ async def test_reconfigure_repairs(hass, tv, entry):
     assert entry.data == {"host": "192.0.2.2", "mac": "aa:bb:cc:dd:ee:01", "token": "tok", "port": 8002}
 
 
+async def test_reauth_repairs_and_keeps_the_rest(hass, tv, entry):
+    tv[1].side_effect = [PairingDenied("no"), "tok2"]
+    result = await entry.start_reauth_flow(hass)
+    assert result["step_id"] == "reauth_confirm" and result["description_placeholders"]["host"] == "192.0.2.1"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "reauth_confirm" and result["errors"] == {"base": "pairing_denied"}
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "reauth_successful"
+    assert entry.data == {**DATA, "token": "tok2"} and entry.options["modes"] == DEFAULT_MODES
+
+
 def test_host_validation():
     assert config_flow._host_ok("192.0.2.1") and config_flow._host_ok("media-pc.lan")
     assert config_flow._host_ok("[fe80::1]")
@@ -376,9 +387,6 @@ async def test_dayparts_ambience_apps(hass, entry):
     result = await _submit(hass, result, {"next_step_id": "apps"})
     result = await _submit(hass, result, {"enabled": ["youtube"], "overrides": "youtube=bad id"})
     assert result["errors"] == {"overrides": "invalid_id"}
-    with patch.object(SamsungTV, "discover_apps", return_value={"netflix": "3201907018807"}):
-        result = await _submit(hass, result, {"enabled": [], "rescan": True})
-    assert _schema(result, "enabled")[0] == ["netflix"] and _schema(result, "overrides")[0] == "netflix=3201907018807"
     result = await _submit(hass, result, {"enabled": ["netflix", "youtube"], "overrides": "netflix=3201907018807"})
     await _save(hass, result)
     assert entry.options["dayparts"]["morning"] == {"start": "07:30", "mode": "chill"}
@@ -386,3 +394,25 @@ async def test_dayparts_ambience_apps(hass, entry):
     assert entry.options["dayparts"]["idle_minutes"] == 15
     assert entry.options["ambience"] == {"backend": "tv", "radio": {"jazz": "https://x.example/a?b=1"}}
     assert entry.options["apps"] == {"enabled": ["netflix", "youtube"], "ids": {"netflix": "3201907018807"}}
+
+
+async def test_apps_keep_discovered_and_rescan_fills_it(hass):
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA, options={"apps": {"enabled": ["youtube"], "ids": {},
+                                                                        "discovered": {"youtube": "111299001912"}}})
+    entry.add_to_hass(hass)
+    result = await _open(hass, entry, "apps")
+    result = await _submit(hass, result, {"enabled": ["youtube"], "overrides": "youtube=abc"})
+    await _save(hass, result)
+    assert entry.options["apps"] == {"enabled": ["youtube"], "ids": {"youtube": "abc"},
+                                     "discovered": {"youtube": "111299001912"}}
+    result = await _open(hass, entry, "apps")
+    with patch.object(SamsungTV, "discover_apps", return_value={}):  # TV in standby
+        result = await _submit(hass, result, {"enabled": [], "rescan": True})
+    assert result["errors"] == {"base": "cannot_connect"}
+    with patch.object(SamsungTV, "discover_apps", return_value={"netflix": "3201907018807"}):
+        result = await _submit(hass, result, {"enabled": [], "overrides": "youtube=abc", "rescan": True})
+    assert _schema(result, "enabled")[0] == ["netflix"] and _schema(result, "overrides")[0] == "youtube=abc"
+    result = await _submit(hass, result, {"enabled": ["netflix", "youtube"], "overrides": "youtube=abc"})
+    await _save(hass, result)
+    assert entry.options["apps"] == {"enabled": ["netflix", "youtube"], "ids": {"youtube": "abc"},
+                                     "discovered": {"netflix": "3201907018807"}}

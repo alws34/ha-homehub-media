@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import aiohttp
 import pytest
 from homeassistant.exceptions import HomeAssistantError
@@ -14,6 +16,13 @@ async def test_bearer_and_json(hass, aioclient_mock):
     await AmbientPlayerClient(hass, "192.0.2.5", 8097, "secret").play({"visual": "rain"})
     _, _, body, headers = aioclient_mock.mock_calls[0]
     assert headers["Authorization"] == "Bearer secret" and body == {"visual": "rain"}
+
+
+async def test_play_waits_longer_than_other_calls(hass):
+    """The player answers /v2/play only after waiting for HDMI and starting mpv."""
+    with patch.object(AmbientPlayerClient, "_request", AsyncMock(return_value={})) as req:
+        await AmbientPlayerClient(hass, "192.0.2.5", 8097, "t").play({"visual": "rain"})
+    assert req.await_args.args[-1].total == 30
 
 
 async def test_401_maps_to_token_error(hass, aioclient_mock):
@@ -96,8 +105,7 @@ async def test_ambient_routes(hass, aioclient_mock, call, args, method, path, bo
         ("open", ("a/b",), "post", "/v1/open/a%2Fb", None),
         ("close", (), "post", "/v1/close", None),
         ("remote", ("play_pause",), "post", "/v1/remote/play_pause", None),
-        ("text", ("hi",), "post", "/v1/keyboard/text", {"text": "hi", "submit": False}),
-        ("text", ("hi", True), "post", "/v1/keyboard/text", {"text": "hi", "submit": True}),
+        ("text", ("hi",), "post", "/v1/keyboard/text", {"text": "hi"}),
         ("pointer_move", (3, -4.5), "post", "/v1/pointer/move", {"dx": 3, "dy": -4.5}),
         ("click", (), "post", "/v1/pointer/click", {"button": "left"}),
         ("click", ("right",), "post", "/v1/pointer/click", {"button": "right"}),

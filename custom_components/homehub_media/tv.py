@@ -196,9 +196,6 @@ class SamsungTV:
         except HomeAssistantError:
             await self.launch(self.browser_id, url)
 
-    async def app_status(self, app_id: str) -> dict | None:
-        return await self._rest("GET", _app_path(app_id))
-
     async def restart_app(self, app_id: str) -> None:
         path = _app_path(app_id)
         try:  # DELETE may 404/fail when the app isn't running; the POST below decides
@@ -216,15 +213,15 @@ class SamsungTV:
                 return
         raise HomeAssistantError(f"App {app_id} did not restart")
 
-    async def discover_apps(self, catalog: dict = APP_CATALOG) -> dict[str, str]:
+    async def discover_apps(self) -> dict[str, str]:
         async def first_installed(ids: list[str]) -> str | None:
             for app_id in ids:
-                if await self.app_status(app_id) is not None:
+                if await self._rest("GET", _app_path(app_id)) is not None:
                     return app_id
             return None
 
-        found = await asyncio.gather(*(first_installed(app["ids"]) for app in catalog.values()))
-        apps = {key: app_id for key, app_id in zip(catalog, found) if app_id}
+        found = await asyncio.gather(*(first_installed(app["ids"]) for app in APP_CATALOG.values()))
+        apps = {key: app_id for key, app_id in zip(APP_CATALOG, found) if app_id}
         self.browser_id = apps.get("browser", self.browser_id)
         return apps
 
