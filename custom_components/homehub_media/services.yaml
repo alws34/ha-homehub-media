@@ -1,0 +1,199 @@
+remote:
+  fields:
+    command:
+      required: true
+      example: select
+      selector:
+        select:
+          options: [up, down, left, right, select, back, home, power, play_pause, play, pause, stop, rewind,
+                    fast_forward, volume_up, volume_down, mute, channel_up, channel_down, guide, menu, info, exit]
+    target:
+      selector:
+        select:
+          options: [tv, box, pc]
+send_key:
+  fields:
+    key:
+      required: true
+      example: KEY_HOME
+      selector:
+        text:
+    hold_secs:
+      selector:
+        number:
+          min: 0
+          max: 5
+          step: 0.1
+          unit_of_measurement: s
+launch_app:
+  fields:
+    app:
+      required: true
+      example: netflix
+      selector:
+        text:
+restart_app:
+  fields:
+    app:
+      required: true
+      example: netflix
+      selector:
+        text:
+send_text:
+  fields:
+    text:
+      required: true
+      selector:
+        text:
+    target:
+      selector:
+        select:
+          options: [tv, pc, keyboard]
+keyboard_key:
+  fields:
+    key:
+      required: true
+      selector:
+        select:
+          options: [backspace, enter, clear]
+    target:
+      selector:
+        select:
+          options: [tv, pc, keyboard]
+pointer:
+  fields:
+    action:
+      required: true
+      selector:
+        select:
+          options: [move, click, right_click, scroll]
+    dx:
+      selector:
+        number:
+          min: -500
+          max: 500
+          mode: box
+    dy:
+      selector:
+        number:
+          min: -500
+          max: 500
+          mode: box
+    target:
+      selector:
+        select:
+          options: [tv, pc]
+set_activity:
+  fields:
+    activity:
+      required: true
+      selector:
+        select:
+          options: ["off", tv, box, pc]
+    force:
+      selector:
+        boolean:
+channel:
+  fields:
+    number:
+      required: true
+      example: "12"
+      selector:
+        text:
+ambience_start:
+  fields:
+    mode:
+      required: true
+      example: fireplace
+      selector:
+        text:
+ambience_stop:
+ambience_update:
+  fields: &composition
+    visual:
+      selector:
+        text:
+    visual_enabled:
+      selector:
+        boolean:
+    video_loop:
+      selector:
+        boolean:
+    video_random_start:
+      selector:
+        boolean:
+    original_volume:
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    soundtrack:
+      selector:
+        text:
+    soundtrack_loop:
+      selector:
+        boolean:
+    soundtrack_random_start:
+      selector:
+        boolean:
+    soundtrack_volume:
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+save_mode:
+  fields:
+    mode:
+      required: true
+      example: fireplace
+      selector:
+        text:
+    <<: *composition
+set_favorite:
+  fields:
+    kind:
+      required: true
+      selector:
+        select:
+          options: [visual, soundtrack]
+    media_id:
+      required: true
+      selector:
+        text:
+    favorite:
+      required: true
+      selector:
+        boolean:
+ambience_auto:
+ambience_sleep_timer:
+  fields:
+    minutes:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 600
+          unit_of_measurement: min
+refresh_catalog:
+rescan_apps:
+play_library_item:
+  fields:
+    server:
+      required: true
+      selector:
+        select:
+          options: [plex, jellyfin]
+    item_id:
+      required: true
+      selector:
+        text:
+pc_open:
+  fields:
+    client:
+      required: true
+      example: jellyfin
+      selector:
+        text:
+pc_close:
