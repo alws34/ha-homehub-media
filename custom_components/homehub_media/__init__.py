@@ -11,6 +11,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
@@ -49,6 +50,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await assistant.ensure_sdk(hass, cfg["provider"])
         except HomeAssistantError as err:
             _LOGGER.warning("Could not install the %s SDK: %s", cfg["provider"], err)
+    elif agent := er.async_get(hass).async_get_entity_id("conversation", DOMAIN, f"{entry.entry_id}_assistant"):
+        er.async_get(hass).async_remove(agent)  # assistant removed in the options: no orphaned agent
     await hass.config_entries.async_forward_entry_setups(entry, _platforms(hub))
     return True
 

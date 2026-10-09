@@ -21,9 +21,11 @@ class QuietSwitch(HomeHubEntity, SwitchEntity):
         return self.hub.activity.quiet
 
     async def async_turn_on(self, **kwargs: Any) -> None:
+        self._touch()
         await self.hub.activity.set_quiet(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        self._touch()
         await self.hub.activity.set_quiet(False)
 
 
@@ -44,5 +46,6 @@ class AutoAmbienceSwitch(HomeHubEntity, SwitchEntity, RestoreEntity):
         self._set(False)
 
     def _set(self, on: bool) -> None:
+        self._touch()
         self.hub.ambience.auto = on
         self.hub.async_notify()  # the card's snapshot and this entity's state
