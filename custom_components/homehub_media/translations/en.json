@@ -1,3 +1,756 @@
 {
-  "title": "HomeHub Media"
+  "title": "HomeHub Media",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect your Samsung TV",
+        "description": "HomeHub Media controls the TV directly over your local network. If the Samsung Smart TV integration is set up, its address is filled in for you.",
+        "data": {
+          "host": "Host",
+          "mac": "MAC address"
+        },
+        "data_description": {
+          "host": "IP address or host name of the TV, for example 192.168.1.50.",
+          "mac": "Optional. Lets HomeHub turn the TV on with Wake-on-LAN. Read from the TV when left empty."
+        }
+      },
+      "pair": {
+        "title": "Allow HomeHub on the TV",
+        "description": "Make sure the TV at {host} is on. Select **Submit**, then press **Allow** on the TV within 30 seconds."
+      },
+      "reconfigure": {
+        "title": "Change the TV connection",
+        "description": "Update the TV address. You will pair with the TV again on the next screen.",
+        "data": {
+          "host": "Host",
+          "mac": "MAC address"
+        },
+        "data_description": {
+          "host": "IP address or host name of the TV.",
+          "mac": "Optional. Lets HomeHub turn the TV on with Wake-on-LAN. Read from the TV when left empty."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the TV. Check that it is on and on the same network.",
+      "pairing_denied": "The TV did not allow HomeHub. Try again and press Allow on the TV, or check Settings > General > External Device Manager > Device Connection Manager.",
+      "invalid_host": "Enter a host name, an IPv4 address, or an IPv6 address in square brackets.",
+      "invalid_mac": "Enter a MAC address such as aa:bb:cc:dd:ee:ff."
+    },
+    "abort": {
+      "single_instance_allowed": "HomeHub Media is already set up. Only one instance is supported.",
+      "already_configured": "This TV is already configured.",
+      "reconfigure_successful": "The TV connection was updated."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "HomeHub Media options",
+        "description": "Everything here is optional. Open a section, make changes, then choose **Save and close** to apply them all.",
+        "menu_options": {
+          "tv": "TV",
+          "apps": "Streaming apps",
+          "servers": "Plex and Jellyfin",
+          "box": "Streaming box",
+          "pc": "Media PC",
+          "keyboard": "Keyboard bridge",
+          "ambience": "Ambience",
+          "modes": "Ambience modes",
+          "volume": "Volume",
+          "dayparts": "Times of day",
+          "assistant": "Voice assistant",
+          "done": "Save and close"
+        },
+        "menu_option_descriptions": {
+          "tv": "TV media player entity and the address the TV uses to reach Home Assistant.",
+          "apps": "Which apps the remote shows and their TV app IDs.",
+          "servers": "Continue watching, recently added and now playing.",
+          "box": "An Android TV or similar box on one of the TV inputs.",
+          "pc": "The HomeHub media PC (ambient player and app coordinator).",
+          "keyboard": "The ESP32 Bluetooth keyboard for typing into apps.",
+          "ambience": "Where ambience plays and your internet radio stations.",
+          "modes": "Add, edit or remove ambience modes and their lighting.",
+          "volume": "Normal and quiet volume levels.",
+          "dayparts": "When each part of the day starts and which mode it suggests.",
+          "assistant": "An AI model that can control the TV and ambience by voice.",
+          "done": "Save every change made in this dialog."
+        }
+      },
+      "tv": {
+        "title": "TV",
+        "description": "Optional helpers for the TV itself.",
+        "data": {
+          "entity": "TV media player",
+          "app_entity": "Current app entity",
+          "base_url": "Home Assistant URL for the TV"
+        },
+        "data_description": {
+          "entity": "A media player for the TV, for example from the Samsung Smart TV integration. Needed to switch inputs by source name and to read the volume.",
+          "app_entity": "An entity whose state is the app running on the TV, if you have one.",
+          "base_url": "How the TV reaches Home Assistant to show ambience, for example http://192.168.1.10:8123. Leave empty to use the internal URL."
+        }
+      },
+      "apps": {
+        "title": "Streaming apps",
+        "description": "Choose the apps to show on the remote. Tick **Rescan TV apps** to detect what is installed.",
+        "data": {
+          "enabled": "Apps",
+          "overrides": "App IDs",
+          "rescan": "Rescan TV apps"
+        },
+        "data_description": {
+          "enabled": "Apps shown on the remote card.",
+          "overrides": "Optional. TV app IDs as app=id pairs separated by commas, for example netflix=3201907018807, youtube=111299001912.",
+          "rescan": "Ask the TV which apps are installed and fill in the fields above. Nothing is saved until you submit without this ticked."
+        }
+      },
+      "servers": {
+        "title": "Plex and Jellyfin",
+        "description": "Pick a media server to set up.",
+        "menu_options": {
+          "plex": "Plex",
+          "jellyfin": "Jellyfin",
+          "init": "Back"
+        }
+      },
+      "plex": {
+        "title": "Plex",
+        "description": "Leave the URL empty to turn Plex off.",
+        "data": {
+          "url": "Server URL",
+          "token": "Token",
+          "player": "Player name",
+          "prefill": "Use the Plex integration's server"
+        },
+        "data_description": {
+          "url": "For example http://192.168.1.20:32400.",
+          "token": "Your Plex token (X-Plex-Token). Leave empty to keep the saved token.",
+          "player": "Optional. Only follow players whose name contains this text, for example Samsung.",
+          "prefill": "Copies the server URL and token from the Plex integration already set up in Home Assistant. Only used when ticked."
+        }
+      },
+      "jellyfin": {
+        "title": "Jellyfin",
+        "description": "Leave the URL empty to turn Jellyfin off. You choose the user on the next screen.",
+        "data": {
+          "url": "Server URL",
+          "api_key": "API key"
+        },
+        "data_description": {
+          "url": "For example http://192.168.1.20:8096.",
+          "api_key": "Create one in the Jellyfin dashboard under API Keys. Leave empty to keep the saved key."
+        }
+      },
+      "jellyfin_user": {
+        "title": "Jellyfin user",
+        "description": "Whose continue watching list should HomeHub show?",
+        "data": {
+          "user_id": "User",
+          "player": "Player name"
+        },
+        "data_description": {
+          "user_id": "The Jellyfin user whose library is shown.",
+          "player": "Optional. Only follow players whose name contains this text, for example Samsung."
+        }
+      },
+      "box": {
+        "title": "Streaming box",
+        "description": "Leave the remote empty to turn the streaming box off.",
+        "data": {
+          "remote": "Box remote",
+          "media_player": "Box media player"
+        },
+        "data_description": {
+          "remote": "The remote entity that sends keys to the box, for example from the Android TV Remote integration.",
+          "media_player": "Optional. Used to tune channels and show what is playing."
+        },
+        "sections": {
+          "input": {
+            "name": "TV input",
+            "description": "How the TV switches to the box.",
+            "data": {
+              "method": "Switch by",
+              "value": "Input"
+            },
+            "data_description": {
+              "method": "Remote key works without a TV media player. Source name needs the TV media player from the TV section.",
+              "value": "A key such as KEY_HDMI1, or a source name such as HDMI 1."
+            }
+          }
+        }
+      },
+      "pc": {
+        "title": "Media PC",
+        "description": "Leave the host empty to turn the media PC off. The tokens are in the PC's HomeHub config files.",
+        "data": {
+          "host": "Host",
+          "ambient_port": "Ambient player port",
+          "ambient_token": "Ambient player token",
+          "coord_port": "Coordinator port",
+          "coord_token": "Coordinator token",
+          "clients": "Apps"
+        },
+        "data_description": {
+          "host": "Host name or IP address of the media PC.",
+          "ambient_port": "Usually 8097.",
+          "ambient_token": "Bearer token of the ambient player. Leave empty to keep the saved token.",
+          "coord_port": "Usually 8098.",
+          "coord_token": "Bearer token of the media hub coordinator. Leave empty to keep the saved token.",
+          "clients": "App names the coordinator can open, for example jellyfin. Lowercase letters, digits and underscores."
+        },
+        "sections": {
+          "input": {
+            "name": "TV input",
+            "description": "How the TV switches to the media PC.",
+            "data": {
+              "method": "Switch by",
+              "value": "Input"
+            },
+            "data_description": {
+              "method": "Remote key works without a TV media player. Source name needs the TV media player from the TV section.",
+              "value": "A key such as KEY_HDMI2, or a source name such as HDMI 2."
+            }
+          }
+        }
+      },
+      "keyboard": {
+        "title": "Keyboard bridge",
+        "description": "Leave the host empty to turn the keyboard bridge off.",
+        "data": {
+          "host": "Host",
+          "key": "Shared key"
+        },
+        "data_description": {
+          "host": "Host name or IP address of the ESP32 keyboard bridge.",
+          "key": "The shared key set in the bridge firmware. Leave empty to keep the saved key."
+        }
+      },
+      "ambience": {
+        "title": "Ambience",
+        "description": "Where ambience plays, and internet radio stations to use as soundtracks.",
+        "data": {
+          "backend": "Play ambience on",
+          "radio": "Radio stations"
+        },
+        "data_description": {
+          "backend": "The media PC is offered once it is set up.",
+          "radio": "One station per line as id=https://url, for example jazz=https://example.com/stream. IDs use lowercase letters, digits, - and _."
+        }
+      },
+      "modes": {
+        "title": "Ambience modes",
+        "description": "Pick a mode to edit or remove, or add a new one.",
+        "data": {
+          "mode": "Mode"
+        },
+        "data_description": {
+          "mode": "The mode to change."
+        }
+      },
+      "mode": {
+        "title": "Ambience mode",
+        "description": "Lighting for this mode. Visuals and sound are chosen on the card.",
+        "data": {
+          "name": "Name",
+          "icon": "Icon",
+          "scene": "Scene",
+          "flicker": "Flickering lights",
+          "lights_only": "Lights only",
+          "delete": "Delete this mode"
+        },
+        "data_description": {
+          "name": "Shown on the card. New modes get their ID from the name, so a new mode cannot be called Off.",
+          "icon": "Shown on the card.",
+          "scene": "Optional. Activated when the mode starts; the previous lighting comes back when it stops.",
+          "flicker": "Optional. Lights that flicker like a fire while the mode runs.",
+          "lights_only": "Only change the lighting; play no visuals or sound.",
+          "delete": "Remove this mode when you submit."
+        }
+      },
+      "volume": {
+        "title": "Volume",
+        "description": "Volume levels used when an activity starts.",
+        "data": {
+          "normal": "Normal volume",
+          "quiet": "Quiet volume",
+          "block_entity": "Block volume changes"
+        },
+        "data_description": {
+          "normal": "TV volume when an activity starts.",
+          "quiet": "TV volume while quiet mode is on.",
+          "block_entity": "Optional. While this entity is on, HomeHub leaves the volume alone."
+        }
+      },
+      "dayparts": {
+        "title": "Times of day",
+        "description": "When each part of the day starts and which ambience mode auto ambience uses then.",
+        "data": {
+          "idle_minutes": "Idle time"
+        },
+        "data_description": {
+          "idle_minutes": "Minutes without remote use before auto ambience starts."
+        },
+        "sections": {
+          "morning": {
+            "name": "Morning",
+            "data": {
+              "start": "Starts at",
+              "mode": "Mode"
+            },
+            "data_description": {
+              "start": "When the morning begins.",
+              "mode": "Optional. Ambience mode for the morning."
+            }
+          },
+          "afternoon": {
+            "name": "Afternoon",
+            "data": {
+              "start": "Starts at",
+              "mode": "Mode"
+            },
+            "data_description": {
+              "start": "When the afternoon begins.",
+              "mode": "Optional. Ambience mode for the afternoon."
+            }
+          },
+          "evening": {
+            "name": "Evening",
+            "data": {
+              "start": "Starts at",
+              "mode": "Mode"
+            },
+            "data_description": {
+              "start": "When the evening begins.",
+              "mode": "Optional. Ambience mode for the evening."
+            }
+          },
+          "night": {
+            "name": "Night",
+            "data": {
+              "start": "Starts at",
+              "mode": "Mode"
+            },
+            "data_description": {
+              "start": "When the night begins.",
+              "mode": "Optional. Ambience mode for the night."
+            }
+          }
+        }
+      },
+      "assistant": {
+        "title": "Voice assistant",
+        "description": "Adds a conversation agent that can control the TV, apps and ambience. Pick it in your voice assistant settings afterwards.",
+        "data": {
+          "provider": "Provider"
+        },
+        "data_description": {
+          "provider": "Ollama runs locally. OpenAI and Claude need an API key and send your requests to that service."
+        }
+      },
+      "assistant_auth": {
+        "title": "Connect the assistant",
+        "description": "The provider's software is installed when you submit, which can take a minute.",
+        "data": {
+          "url": "Ollama URL",
+          "api_key": "API key"
+        },
+        "data_description": {
+          "url": "Address of your Ollama server.",
+          "api_key": "Stored in Home Assistant and only sent to the provider. Leave empty to keep the saved key."
+        }
+      },
+      "assistant_model": {
+        "title": "Choose a model",
+        "description": "Models available to your account.",
+        "data": {
+          "model": "Model"
+        },
+        "data_description": {
+          "model": "The model that answers. You can also type a model name."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect. Check the address and that the device or service is running.",
+      "invalid_auth": "The token, key or password was rejected.",
+      "invalid_url": "Enter a valid URL. Radio stations need one id=https://url per line.",
+      "invalid_id": "Use app=id pairs with known apps and IDs of letters, digits, '.', '-' or '_'.",
+      "invalid_host": "Enter a host name, an IPv4 address, or an IPv6 address in square brackets.",
+      "invalid_input": "Enter a key such as KEY_HDMI1, or a source name when switching by source.",
+      "tv_entity_required": "Switching inputs by source name needs the TV media player. Set it in the TV section first, or switch by remote key.",
+      "mode_exists": "A mode with this name already exists.",
+      "invalid_name": "Enter a name. A new mode cannot be called Off.",
+      "invalid_client": "App names use lowercase letters, digits and underscores only, for example jellyfin or prime_video.",
+      "api_key_required": "Enter the API key."
+    }
+  },
+  "selector": {
+    "input_method": {
+      "options": {
+        "key": "Remote key",
+        "source": "Source name"
+      }
+    },
+    "provider": {
+      "options": {
+        "none": "None (turn off)",
+        "ollama": "Ollama (local)",
+        "openai": "OpenAI",
+        "claude": "Claude (Anthropic)"
+      }
+    },
+    "backend": {
+      "options": {
+        "tv": "Samsung TV",
+        "pc": "Media PC"
+      }
+    },
+    "mode_pick": {
+      "options": {
+        "add-new": "Add new mode"
+      }
+    }
+  },
+  "entity": {
+    "select": {
+      "ambience_mode": {
+        "name": "Ambience mode",
+        "state": {
+          "off": "Off",
+          "fireplace": "Fireplace",
+          "dinner": "Dinner",
+          "reading": "Reading",
+          "game_night": "Game Night",
+          "chill": "Chill",
+          "movie_time": "Movie Time",
+          "dog_tv": "DOG TV"
+        }
+      },
+      "activity": {
+        "name": "Activity",
+        "state": {
+          "off": "Off",
+          "tv": "Samsung TV",
+          "box": "Streaming box",
+          "pc": "Media PC"
+        }
+      }
+    },
+    "switch": {
+      "quiet_mode": {
+        "name": "Quiet mode"
+      },
+      "auto_ambience": {
+        "name": "Auto ambience"
+      }
+    },
+    "sensor": {
+      "ambience_sleep_timer": {
+        "name": "Ambience sleep timer"
+      },
+      "now_playing": {
+        "name": "Now playing"
+      }
+    },
+    "conversation": {
+      "assistant": {
+        "name": "Assistant"
+      }
+    }
+  },
+  "services": {
+    "remote": {
+      "name": "Remote",
+      "description": "Sends a remote control command to the TV, streaming box or media PC.",
+      "fields": {
+        "command": {
+          "name": "Command",
+          "description": "The button to press, for example up, select or play_pause."
+        },
+        "target": {
+          "name": "Target",
+          "description": "Device to send it to. Defaults to the current activity. Volume always goes to the TV."
+        }
+      }
+    },
+    "send_key": {
+      "name": "Send TV key",
+      "description": "Sends a raw Samsung remote key to the TV.",
+      "fields": {
+        "key": {
+          "name": "Key",
+          "description": "Samsung key name, for example KEY_HDMI1."
+        },
+        "hold_secs": {
+          "name": "Hold time",
+          "description": "Seconds to hold the key down (0-5)."
+        }
+      }
+    },
+    "launch_app": {
+      "name": "Launch app",
+      "description": "Opens a streaming app on the TV.",
+      "fields": {
+        "app": {
+          "name": "App",
+          "description": "App name such as netflix, or a TV app ID."
+        }
+      }
+    },
+    "restart_app": {
+      "name": "Restart app",
+      "description": "Closes and reopens an app on the TV.",
+      "fields": {
+        "app": {
+          "name": "App",
+          "description": "App name such as netflix, or a TV app ID."
+        }
+      }
+    },
+    "send_text": {
+      "name": "Send text",
+      "description": "Types text into the app on screen.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "Up to 200 printable characters."
+        },
+        "target": {
+          "name": "Target",
+          "description": "Where to type. Defaults to the best option for the current activity."
+        }
+      }
+    },
+    "keyboard_key": {
+      "name": "Keyboard key",
+      "description": "Presses backspace, enter or clear on the active keyboard.",
+      "fields": {
+        "key": {
+          "name": "Key",
+          "description": "backspace, enter or clear."
+        },
+        "target": {
+          "name": "Target",
+          "description": "Where to send it. Defaults to the best option for the current activity."
+        }
+      }
+    },
+    "pointer": {
+      "name": "Pointer",
+      "description": "Moves or clicks the on-screen pointer.",
+      "fields": {
+        "action": {
+          "name": "Action",
+          "description": "move, click, right_click or scroll."
+        },
+        "dx": {
+          "name": "Horizontal distance",
+          "description": "Pixels to move right (negative moves left)."
+        },
+        "dy": {
+          "name": "Vertical distance",
+          "description": "Pixels to move down (negative moves up), or the scroll amount."
+        },
+        "target": {
+          "name": "Target",
+          "description": "tv or pc. Defaults to the current activity."
+        }
+      }
+    },
+    "set_activity": {
+      "name": "Set activity",
+      "description": "Switches between off, the TV, the streaming box and the media PC.",
+      "fields": {
+        "activity": {
+          "name": "Activity",
+          "description": "off, tv, box or pc."
+        },
+        "force": {
+          "name": "Force",
+          "description": "Switch inputs again even if the activity is already active."
+        }
+      }
+    },
+    "channel": {
+      "name": "Channel",
+      "description": "Tunes the streaming box to a channel number.",
+      "fields": {
+        "number": {
+          "name": "Number",
+          "description": "Channel number, up to 4 digits."
+        }
+      }
+    },
+    "ambience_start": {
+      "name": "Start ambience",
+      "description": "Starts an ambience mode.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "ID of the ambience mode, for example fireplace."
+        }
+      }
+    },
+    "ambience_stop": {
+      "name": "Stop ambience",
+      "description": "Stops ambience and restores the lighting."
+    },
+    "ambience_update": {
+      "name": "Update ambience",
+      "description": "Changes what the running ambience plays.",
+      "fields": {
+        "visual": {
+          "name": "Visual",
+          "description": "ID of the video to show."
+        },
+        "visual_enabled": {
+          "name": "Show visual",
+          "description": "Show the video."
+        },
+        "video_loop": {
+          "name": "Loop video",
+          "description": "Repeat the video."
+        },
+        "video_random_start": {
+          "name": "Random video start",
+          "description": "Start the video at a random point."
+        },
+        "original_volume": {
+          "name": "Video volume",
+          "description": "Volume of the video's own sound (0-100)."
+        },
+        "soundtrack": {
+          "name": "Soundtrack",
+          "description": "ID of the soundtrack or radio station."
+        },
+        "soundtrack_loop": {
+          "name": "Loop soundtrack",
+          "description": "Repeat the soundtrack."
+        },
+        "soundtrack_random_start": {
+          "name": "Random soundtrack start",
+          "description": "Start the soundtrack at a random point."
+        },
+        "soundtrack_volume": {
+          "name": "Soundtrack volume",
+          "description": "Volume of the soundtrack (0-100)."
+        }
+      }
+    },
+    "save_mode": {
+      "name": "Save mode",
+      "description": "Saves visuals and sound as the default for an ambience mode.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "ID of the ambience mode to save."
+        },
+        "visual": {
+          "name": "Visual",
+          "description": "ID of the video to show."
+        },
+        "visual_enabled": {
+          "name": "Show visual",
+          "description": "Show the video."
+        },
+        "video_loop": {
+          "name": "Loop video",
+          "description": "Repeat the video."
+        },
+        "video_random_start": {
+          "name": "Random video start",
+          "description": "Start the video at a random point."
+        },
+        "original_volume": {
+          "name": "Video volume",
+          "description": "Volume of the video's own sound (0-100)."
+        },
+        "soundtrack": {
+          "name": "Soundtrack",
+          "description": "ID of the soundtrack or radio station."
+        },
+        "soundtrack_loop": {
+          "name": "Loop soundtrack",
+          "description": "Repeat the soundtrack."
+        },
+        "soundtrack_random_start": {
+          "name": "Random soundtrack start",
+          "description": "Start the soundtrack at a random point."
+        },
+        "soundtrack_volume": {
+          "name": "Soundtrack volume",
+          "description": "Volume of the soundtrack (0-100)."
+        }
+      }
+    },
+    "set_favorite": {
+      "name": "Set favorite",
+      "description": "Marks a visual or soundtrack as a favorite.",
+      "fields": {
+        "kind": {
+          "name": "Kind",
+          "description": "visual or soundtrack."
+        },
+        "media_id": {
+          "name": "Media ID",
+          "description": "ID of the visual or soundtrack."
+        },
+        "favorite": {
+          "name": "Favorite",
+          "description": "On to add, off to remove."
+        }
+      }
+    },
+    "ambience_auto": {
+      "name": "Auto ambience",
+      "description": "Starts the ambience mode for the current time of day."
+    },
+    "ambience_sleep_timer": {
+      "name": "Ambience sleep timer",
+      "description": "Fades out and stops ambience after a while.",
+      "fields": {
+        "minutes": {
+          "name": "Minutes",
+          "description": "Minutes until ambience stops (0 cancels the timer)."
+        }
+      }
+    },
+    "refresh_catalog": {
+      "name": "Refresh catalog",
+      "description": "Scans the media folder for new visuals and soundtracks."
+    },
+    "rescan_apps": {
+      "name": "Rescan apps",
+      "description": "Asks the TV which streaming apps are installed."
+    },
+    "play_library_item": {
+      "name": "Play library item",
+      "description": "Opens Plex or Jellyfin on the TV and plays an item.",
+      "fields": {
+        "server": {
+          "name": "Server",
+          "description": "plex or jellyfin."
+        },
+        "item_id": {
+          "name": "Item ID",
+          "description": "ID of the movie or episode on that server."
+        }
+      }
+    },
+    "pc_open": {
+      "name": "Open media PC app",
+      "description": "Opens an app on the media PC.",
+      "fields": {
+        "client": {
+          "name": "App",
+          "description": "App name as set in the media PC options, for example jellyfin."
+        }
+      }
+    },
+    "pc_close": {
+      "name": "Close media PC app",
+      "description": "Closes the app open on the media PC."
+    }
+  }
 }
