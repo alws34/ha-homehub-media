@@ -1,25 +1,28 @@
 """Persistent per-mode compositions and favourites."""
 from __future__ import annotations
 
+from copy import deepcopy
+
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .catalog import ID_RE, validate_composition
 from .const import DOMAIN
 
+_EMPTY = {"compositions": {}, "favorites": {"visual": [], "soundtrack": []}}
+
 
 class HomeHubStore:
     def __init__(self, hass: HomeAssistant) -> None:
         # ponytail: no migration yet; bump the Store version and add a migrate func when the shape changes
         self._store = Store(hass, 1, f"{DOMAIN}.data")
-        self._data: dict = {"compositions": {}, "favorites": {"visual": [], "soundtrack": []}}
+        self._data = deepcopy(_EMPTY)
 
     async def async_load(self) -> None:
         saved = await self._store.async_load() or {}
-        self._data = {
-            "compositions": saved.get("compositions", {}),
-            "favorites": {"visual": [], "soundtrack": [], **saved.get("favorites", {})},
-        }
+        self._data = deepcopy(_EMPTY)
+        self._data["compositions"].update(saved.get("compositions", {}))
+        self._data["favorites"].update(saved.get("favorites", {}))
 
     def composition(self, mode_id: str) -> dict | None:
         comp = self._data["compositions"].get(mode_id)
@@ -36,6 +39,9 @@ class HomeHubStore:
         if kind not in ("visual", "soundtrack") or not ID_RE.fullmatch(media_id):
             raise ValueError("invalid favourite")
         favs = self.favorites(kind)
-        favs.add(media_id) if favorite else favs.discard(media_id)
+        if favorite:
+            favs.add(media_id)
+        else:
+            favs.discard(media_id)
         self._data["favorites"][kind] = sorted(favs)
         await self._store.async_save(self._data)
