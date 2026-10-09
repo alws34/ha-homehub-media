@@ -97,7 +97,7 @@ COMPOSITION = {  # types only; the ambience manager validates ids and the merged
     vol.Optional("soundtrack_loop"): cv.boolean, vol.Optional("soundtrack_random_start"): cv.boolean,
     vol.Optional("soundtrack_volume"): _PCT,
 }
-ADMIN_SERVICES = ("refresh_catalog", "rescan_apps")  # disk/TV scans and option writes
+ADMIN_SERVICES = ("rescan_apps",)  # writes the config entry; a media-folder rescan is harmless for any user
 SERVICES: dict[str, tuple[dict, Any]] = {
     "remote": ({vol.Required("command"): vol.In(COMMANDS), vol.Optional("target"): vol.In(TARGETS)},
                lambda hub, d: hub.remote(**d)),

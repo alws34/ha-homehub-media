@@ -214,7 +214,7 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 | `set_favorite` | `kind`, `media_id`, `favorite` | Marks (`favorite: true`) or unmarks a `visual` or `soundtrack` as a favourite. |
 | `ambience_auto` | | Starts the mode set for the current time of day. Fails if none is set. |
 | `ambience_sleep_timer` | `minutes` | Stops ambience after `minutes` (0 to 600). 0 cancels the timer. Needs a running mode. |
-| `refresh_catalog` | | Rescans the ambience folders (or the media PC) for visuals and soundtracks. Admin users only. |
+| `refresh_catalog` | | Rescans the ambience folders (or the media PC) for visuals and soundtracks. |
 | `rescan_apps` | | Asks the TV which streaming apps are installed. The TV must be on. Admin users only. |
 | `play_library_item` | `server`, `item_id` | Opens Plex or Jellyfin on the TV and plays an item. `server` is `plex` or `jellyfin`, and `item_id` is the item's ID on that server. |
 | `pc_open` | `client` | Opens an app on the media PC by its name, as listed in the Media PC options. Switches the activity to Media PC and stops ambience that plays video or sound. |
@@ -317,7 +317,7 @@ HomeHub Media replaces the HomeHub Media Controller & Ambience bundle (YAML pack
 
 ## Security
 
-- Every service and WebSocket command goes through Home Assistant's authentication. Only signed-in users and authorised automations can call them. `rescan_apps` and `refresh_catalog` are limited to admin users.
+- Every service and WebSocket command goes through Home Assistant's authentication. Only signed-in users and authorised automations can call them. `rescan_apps` (it rewrites the integration options) is limited to admin users.
 - The TV ambience page link is signed and tied to one ambience session. It stops working when that ambience stops. Links to ambience media files are signed and expire after 24 hours. Restarting Home Assistant revokes all signed links.
 - Plex and Jellyfin tokens stay in Home Assistant. Artwork goes through an authenticated Home Assistant proxy, so the tokens never reach the browser or the TV.
 - Titles from shared Plex or Jellyfin servers are untrusted text for the voice assistant. See [Voice assistant](#voice-assistant).

@@ -289,3 +289,20 @@ test("no polling without a same-origin s parameter", () => {
   assert.equal(load().fetched.length, 0);
   assert.equal(load({ search: "?s=http%3A%2F%2Fevil%2Fx" }).fetched.length, 0);
 });
+
+test("a revoked session (404) goes black and stops polling", async () => {
+  let n = 0;
+  const ok = (body) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
+  const p = load({
+    search: `?s=${encodeURIComponent(SIG)}`,
+    fetchImpl: () => (n++ === 0 ? ok(st(1, { visual: vis("/media/local/a.mp4"), next: SIG })) : Promise.resolve({ ok: false, status: 404 })),
+  });
+  await drain();
+  assert.ok(p.els.v.src.endsWith("/media/local/a.mp4"));
+  const poll = p.timers.find((x) => x.ms === 1000);
+  p.timers.splice(p.timers.indexOf(poll), 1);
+  poll.f();                                          // next poll -> 404
+  await drain();
+  assert.equal(p.els.v.src, "");                    // went black
+  assert.equal(p.timers.filter((x) => x.ms !== 10000).length, 0);  // no further poll scheduled
+});
