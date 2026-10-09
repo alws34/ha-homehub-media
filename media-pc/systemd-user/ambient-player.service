@@ -21,6 +21,13 @@ ProtectHome=read-only
 ReadOnlyPaths=/srv/homehub/jellyfin-media/library/Ambience/Videos
 ReadOnlyPaths=/srv/homehub/jellyfin-media/library/Ambience/Soundtracks
 ReadWritePaths=%h/.local/state/ambient-player
+ReadWritePaths=%t
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+RestrictSUIDSGID=true
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
 UMask=0077
 
 [Install]

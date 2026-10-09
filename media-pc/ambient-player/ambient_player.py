@@ -5,25 +5,27 @@ The service owns two independent MPV processes:
   * video: fullscreen visual plus its original audio
   * soundtrack: audio-only, independently looped/seeked/levelled
 
-The v1 scene API is retained for existing Home Assistant scripts.  The v2 API
-adds catalog, composition, profile, favorite, per-layer lifecycle, partial
-live updates that never restart an unmentioned layer, and configured live
-radio streams in the dynamic soundtrack catalog.
+The v2 API is a catalog plus a player: composition playback, per-layer
+lifecycle, partial live updates that never restart an unmentioned layer, and
+configured live radio streams in the dynamic soundtrack catalog. Profiles and
+favourites live in Home Assistant. Every request must come from the IP
+allowlist, name a configured Host and carry the bearer token; bodies are JSON.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import ipaddress
 import json
+import logging
 import os
 import random
 import re
 import signal
 import socket
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -32,15 +34,9 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
-import gi
-
-gi.require_version("Gio", "2.0")
-gi.require_version("GLib", "2.0")
-from gi.repository import Gio, GLib  # noqa: E402
-
-
+LOGGER = logging.getLogger("ambient-player")
 MUTTER_BUS = "org.gnome.Mutter.DisplayConfig"
 MUTTER_PATH = "/org/gnome/Mutter/DisplayConfig"
 MUTTER_INTERFACE = "org.gnome.Mutter.DisplayConfig"
@@ -48,10 +44,20 @@ ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 AUDIO_ONLY_ID = "audio_only"
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov"}
 SOUNDTRACK_EXTENSIONS = {".mp3", ".ogg", ".opus", ".flac", ".m4a", ".wav"}
+DEFAULT_PORT = 8097
+MAX_REQUEST_BYTES = 65536
+MAX_CONNECTIONS = 16  # for allowlisted peers
+MAX_UNLISTED_CONNECTIONS = 2  # everyone else: enough for their 403, too few to starve Home Assistant
+TOKEN_RE = re.compile(r"[\x21-\x7e]{32,}")
 
 
 class PlayerError(RuntimeError):
-    """An expected, user-facing controller error."""
+    """An expected controller error. Clients only ever see `code`; the message is logged."""
+
+    def __init__(self, message: str, code: str = "invalid_request"):
+        # code is one of: invalid_request, unknown_media, unavailable, busy
+        super().__init__(message)
+        self.code = code
 
 
 def run_checked(args: list[str], timeout: float = 20.0) -> str:
@@ -66,15 +72,10 @@ def run_checked(args: list[str], timeout: float = 20.0) -> str:
     if completed.returncode != 0:
         raise PlayerError(
             f"command failed ({completed.returncode}): {args[0]}: "
-            f"{completed.stdout.strip()}"
+            f"{completed.stdout.strip()}",
+            "unavailable",
         )
     return completed.stdout
-
-
-def dbus_call(proxy: Gio.DBusProxy, method: str, parameters: GLib.Variant | None = None):
-    return proxy.call_sync(
-        method, parameters, Gio.DBusCallFlags.NONE, 15_000, None
-    ).unpack()
 
 
 def atomic_json_write(path: Path, value: dict[str, Any]) -> None:
@@ -130,7 +131,7 @@ class MediaItem:
     fingerprint: str
     source_type: str = "file"
 
-    def public(self, favorite: bool) -> dict[str, Any]:
+    def public(self) -> dict[str, Any]:
         return {
             "id": self.media_id,
             "kind": self.kind,
@@ -141,8 +142,21 @@ class MediaItem:
             "size": self.size,
             "duration": round(self.duration, 3) if self.duration is not None else None,
             "has_audio": self.has_audio,
-            "favorite": favorite,
         }
+
+
+# Fullscreen black frame shown on the video layer during soundtrack-only playback.
+AUDIO_ONLY_ITEM = MediaItem(
+    media_id=AUDIO_ONLY_ID,
+    kind="video",
+    title="Audio Only",
+    path="av://lavfi:color=c=black:s=1920x1080:r=1",
+    relative_path=None,
+    size=0,
+    duration=None,
+    has_audio=False,
+    fingerprint="built-in-audio-only-guard",
+)
 
 
 @dataclass
@@ -161,25 +175,27 @@ class Layer:
 
 
 class PersistentState:
-    def __init__(self, path: Path, defaults: dict[str, Any]):
+    """Only the catalog id cache (stable ids across rescans). v2 profiles/favourites are dropped.
+
+    The cache is disposable: an unusable file is set aside as <name>.corrupt and the service starts fresh.
+    """
+
+    def __init__(self, path: Path):
         self.path = path
-        self.data: dict[str, Any] = {
-            "version": 2,
-            "catalog": {"video": {}, "soundtrack": {}},
-            "favorites": {"video": [], "soundtrack": []},
-            "profiles": defaults,
-        }
+        self.data: dict[str, Any] = {"version": 3, "catalog": {"video": {}, "soundtrack": {}}}
         if path.exists():
-            loaded = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(loaded, dict) or loaded.get("version") != 2:
-                raise PlayerError("unsupported or invalid persistent state")
-            self.data.update(loaded)
-            for kind in ("video", "soundtrack"):
-                self.data.setdefault("catalog", {}).setdefault(kind, {})
-                self.data.setdefault("favorites", {}).setdefault(kind, [])
-            profiles = self.data.setdefault("profiles", {})
-            for mode, profile in defaults.items():
-                profiles.setdefault(mode, profile)
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                catalog = {kind: dict(loaded.get("catalog", {}).get(kind, {})) for kind in ("video", "soundtrack")}
+                if loaded.get("version") not in (2, 3) or not all(
+                    isinstance(record, dict) for records in catalog.values() for record in records.values()
+                ):
+                    raise ValueError("unsupported version or catalog shape")
+                self.data["catalog"] = catalog
+            except (ValueError, TypeError, AttributeError) as exc:  # JSONDecodeError is a ValueError
+                corrupt = path.with_name(path.name + ".corrupt")
+                LOGGER.warning("State file unusable (%s); moved to %s, starting fresh", exc, corrupt)
+                path.replace(corrupt)
         self.save()
 
     def save(self) -> None:
@@ -199,6 +215,7 @@ class Catalog:
         }
         self.soundtrack_streams = dict(config.get("soundtrack_streams", {}))
         self.items: dict[str, dict[str, MediaItem]] = {"video": {}, "soundtrack": {}}
+        self.skipped = 0
         self.refresh()
 
     @staticmethod
@@ -287,23 +304,31 @@ class Catalog:
     def refresh(self) -> dict[str, Any]:
         refreshed: dict[str, dict[str, MediaItem]] = {"video": {}, "soundtrack": {}}
         records: dict[str, dict[str, Any]] = {"video": {}, "soundtrack": {}}
+        skipped = 0
         for kind, root in self.roots.items():
             extensions = VIDEO_EXTENSIONS if kind == "video" else SOUNDTRACK_EXTENSIONS
-            used: set[str] = set()
+            # Stream ids are claimed first, so a colliding file is renamed or skipped, never the stream.
+            used: set[str] = set(self.soundtrack_streams) if kind == "soundtrack" else set()
             for path in sorted(root.rglob("*"), key=lambda item: str(item).lower()):
                 if not path.is_file() or path.suffix.lower() not in extensions:
                     continue
-                resolved = path.resolve(strict=True)
-                if root not in resolved.parents:
-                    raise PlayerError(f"catalog item escapes {kind} root")
-                if not os.access(resolved, os.R_OK):
-                    raise PlayerError(f"catalog item is unreadable: {path.name}")
-                relative = resolved.relative_to(root).as_posix()
-                fingerprint = self._fingerprint(resolved)
-                media_id = self._assign_id(kind, relative, fingerprint, used)
-                if media_id in used:
-                    raise PlayerError(f"duplicate {kind} id: {media_id}")
-                duration, has_audio = self._probe(resolved)
+                try:
+                    resolved = path.resolve(strict=True)
+                    if root not in resolved.parents:
+                        raise PlayerError(f"catalog item escapes {kind} root")
+                    if not os.access(resolved, os.R_OK):
+                        raise PlayerError(f"catalog item is unreadable: {path.name}")
+                    relative = resolved.relative_to(root).as_posix()
+                    fingerprint = self._fingerprint(resolved)
+                    media_id = self._assign_id(kind, relative, fingerprint, used)
+                    if media_id in used:
+                        raise PlayerError(f"duplicate {kind} id: {media_id}")
+                    duration, has_audio = self._probe(resolved)
+                except (PlayerError, OSError, subprocess.SubprocessError) as exc:
+                    # One bad file must not take the whole catalog (or the service) down.
+                    LOGGER.warning("Skipping %s: %s", path, exc)
+                    skipped += 1
+                    continue
                 item = MediaItem(
                     media_id=media_id,
                     kind=kind,
@@ -323,8 +348,6 @@ class Catalog:
                 used.add(media_id)
             if kind == "soundtrack":
                 for media_id, stream_url in sorted(self.soundtrack_streams.items()):
-                    if media_id in used:
-                        raise PlayerError(f"duplicate soundtrack id: {media_id}")
                     label = media_id.replace("_", " ").strip()
                     if label.startswith("radio "):
                         label = f"{label[6:]} live"
@@ -347,28 +370,22 @@ class Catalog:
                         "fingerprint": fingerprint,
                         "source_type": "stream",
                     }
-                    used.add(media_id)
-        if not refreshed["video"]:
-            raise PlayerError("video catalog is empty")
         self.items = refreshed
+        self.skipped = skipped
         self.state.data["catalog"] = records
         self.state.save()
         return self.public()
 
     def get(self, kind: str, media_id: str) -> MediaItem:
         if kind not in self.items or media_id not in self.items[kind]:
-            raise PlayerError(f"unknown {kind}: {media_id}")
+            raise PlayerError(f"unknown {kind}: {media_id}", "unknown_media")
         return self.items[kind][media_id]
 
     def public(self) -> dict[str, Any]:
-        result: dict[str, Any] = {"ok": True}
+        result: dict[str, Any] = {"ok": True, "skipped": self.skipped}
         for kind in ("video", "soundtrack"):
-            favorites = set(self.state.data["favorites"][kind])
             key = "visuals" if kind == "video" else "soundtracks"
-            result[key] = [
-                self.items[kind][media_id].public(media_id in favorites)
-                for media_id in sorted(self.items[kind])
-            ]
+            result[key] = [self.items[kind][media_id].public() for media_id in sorted(self.items[kind])]
         return result
 
 
@@ -382,14 +399,8 @@ class DualAmbientPlayer:
             else tempfile.gettempdir()
         )
         self.runtime_dir = Path(os.environ.get("XDG_RUNTIME_DIR", runtime_default))
-        self.state = PersistentState(
-            Path(config["state_file"]), dict(config.get("default_profiles", {}))
-        )
+        self.state = PersistentState(Path(config["state_file"]))
         self.catalog = Catalog(config, self.state)
-        self.configured_legacy_scenes = dict(config["legacy_scenes"])
-        self.legacy_scenes: dict[str, str] = {}
-        self.unavailable_legacy_scenes: dict[str, str] = {}
-        self.profile_errors: dict[str, str] = {}
         self.layers = {
             "video": Layer("video", ipc_path=self.runtime_dir / "ambient-player-video.sock"),
             "soundtrack": Layer(
@@ -397,47 +408,6 @@ class DualAmbientPlayer:
             ),
         }
         self.last_error: str | None = None
-        self._refresh_dynamic_references()
-        self.state.save()
-
-    def _validate_legacy_scenes(self) -> None:
-        available: dict[str, str] = {}
-        unavailable: dict[str, str] = {}
-        for scene, visual_id in self.configured_legacy_scenes.items():
-            if (
-                not isinstance(scene, str)
-                or not ID_RE.fullmatch(scene)
-                or not isinstance(visual_id, str)
-                or not ID_RE.fullmatch(visual_id)
-            ):
-                unavailable[str(scene)] = "invalid configured scene or media id"
-                continue
-            try:
-                self.catalog.get("video", visual_id)
-            except PlayerError as exc:
-                unavailable[scene] = str(exc)
-            else:
-                available[scene] = visual_id
-        self.legacy_scenes = available
-        self.unavailable_legacy_scenes = unavailable
-
-    def _validate_saved_profiles(self) -> None:
-        errors: dict[str, str] = {}
-        for mode, profile in list(self.state.data["profiles"].items()):
-            try:
-                normalized = self.validate_composition(profile)
-            except PlayerError as exc:
-                # Media libraries are deliberately dynamic. Preserve a stale
-                # profile for editing/recovery, but never let it prevent the
-                # service or the rest of the catalog from starting.
-                errors[mode] = str(exc)
-            else:
-                self.state.data["profiles"][mode] = normalized
-        self.profile_errors = errors
-
-    def _refresh_dynamic_references(self) -> None:
-        self._validate_legacy_scenes()
-        self._validate_saved_profiles()
 
     def _refresh_layer(self, layer: Layer) -> None:
         if layer.process is not None and layer.process.poll() is not None:
@@ -454,7 +424,7 @@ class DualAmbientPlayer:
     def _ipc(self, layer: Layer, command: list[Any]) -> Any:
         self._refresh_layer(layer)
         if layer.process is None or layer.ipc_path is None:
-            raise PlayerError(f"{layer.name} is not playing")
+            raise PlayerError(f"{layer.name} is not playing", "unavailable")
         request_id = random.SystemRandom().randrange(1, 2**31)
         payload = json.dumps({"command": command, "request_id": request_id}).encode() + b"\n"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
@@ -465,7 +435,7 @@ class DualAmbientPlayer:
             while True:
                 chunk = client.recv(4096)
                 if not chunk:
-                    raise PlayerError(f"{layer.name} IPC closed unexpectedly")
+                    raise PlayerError(f"{layer.name} IPC closed unexpectedly", "unavailable")
                 buffer += chunk
                 while b"\n" in buffer:
                     raw, buffer = buffer.split(b"\n", 1)
@@ -474,7 +444,8 @@ class DualAmbientPlayer:
                         continue
                     if response.get("error") != "success":
                         raise PlayerError(
-                            f"{layer.name} IPC error: {response.get('error', 'unknown')}"
+                            f"{layer.name} IPC error: {response.get('error', 'unknown')}",
+                            "unavailable",
                         )
                     return response.get("data")
 
@@ -484,7 +455,7 @@ class DualAmbientPlayer:
         if layer.process is not None:
             try:
                 position = self._ipc(layer, ["get_property", "time-pos"])
-            except Exception:
+            except Exception:  # noqa: BLE001 - position is best-effort
                 position = None
         return {
             "state": "playing" if layer.process else "idle",
@@ -509,16 +480,14 @@ class DualAmbientPlayer:
                 "state": "playing"
                 if video["state"] == "playing" or soundtrack["state"] == "playing"
                 else "idle",
-                # v1 compatibility fields retained for existing diagnostics.
-                "scene": video["id"],
-                "pid": video["pid"],
-                "started_at": video["started_at"],
                 "video": video,
                 "soundtrack": soundtrack,
                 "last_error": self.last_error,
-                "available_scenes": sorted(self.legacy_scenes),
-                "unavailable_scenes": dict(self.unavailable_legacy_scenes),
-                "profile_errors": dict(self.profile_errors),
+                "catalog": {
+                    "visuals": len(self.catalog.items["video"]),
+                    "soundtracks": len(self.catalog.items["soundtrack"]),
+                    "skipped": self.catalog.skipped,
+                },
             }
 
     def catalog_public(self) -> dict[str, Any]:
@@ -527,13 +496,7 @@ class DualAmbientPlayer:
 
     def refresh_catalog(self) -> dict[str, Any]:
         with self.lock:
-            result = self.catalog.refresh()
-            self._refresh_dynamic_references()
-            self.state.save()
-            result["available_scenes"] = sorted(self.legacy_scenes)
-            result["unavailable_scenes"] = dict(self.unavailable_legacy_scenes)
-            result["profile_errors"] = dict(self.profile_errors)
-            return result
+            return self.catalog.refresh()
 
     def _wait_for_hdmi(self) -> str:
         deadline = time.monotonic() + float(self.config.get("hdmi_wait_seconds", 20))
@@ -548,11 +511,20 @@ class DualAmbientPlayer:
             if len(connected) == 1:
                 return connected[0]
             if len(connected) > 1:
-                raise PlayerError(f"multiple HDMI displays are connected: {connected}")
+                raise PlayerError(f"multiple HDMI displays are connected: {connected}", "unavailable")
             time.sleep(0.5)
-        raise PlayerError("Samsung HDMI display did not connect before the timeout")
+        raise PlayerError("Samsung HDMI display did not connect before the timeout", "unavailable")
 
     def _wake_display(self) -> None:
+        import gi  # lazy: only the live display path needs GObject introspection
+
+        gi.require_version("Gio", "2.0")
+        gi.require_version("GLib", "2.0")
+        from gi.repository import Gio, GLib
+
+        def dbus_call(proxy, method: str, parameters=None):
+            return proxy.call_sync(method, parameters, Gio.DBusCallFlags.NONE, 15_000, None).unpack()
+
         proxy = Gio.DBusProxy.new_for_bus_sync(
             Gio.BusType.SESSION,
             Gio.DBusProxyFlags.NONE,
@@ -571,7 +543,8 @@ class DualAmbientPlayer:
         if len(active_connectors) != 1 or not active_connectors[0].startswith("HDMI"):
             raise PlayerError(
                 "refusing to replace the active monitor layout: "
-                + (", ".join(active_connectors) if active_connectors else "none")
+                + (", ".join(active_connectors) if active_connectors else "none"),
+                "unavailable",
             )
         properties_proxy = Gio.DBusProxy.new_for_bus_sync(
             Gio.BusType.SESSION,
@@ -605,7 +578,7 @@ class DualAmbientPlayer:
                 match = re.search(r"(?:^|\s)(\d+)\.\s", stripped)
                 if match:
                     return int(match.group(1))
-        raise PlayerError(f"could not locate {fragment!r} in PipeWire {section}")
+        raise PlayerError(f"could not locate {fragment!r} in PipeWire {section}", "unavailable")
 
     def _configure_hdmi_audio(self) -> None:
         status = run_checked(["/usr/bin/wpctl", "status", "-n"])
@@ -646,24 +619,6 @@ class DualAmbientPlayer:
                 layer.ipc_path.unlink(missing_ok=True)
         return True
 
-    def _audio_only_item(self) -> MediaItem:
-        path = Path(
-            self.config.get("audio_only_image", "/opt/ambient-player/audio_only.ppm")
-        ).resolve(strict=True)
-        if not path.is_file() or not os.access(path, os.R_OK):
-            raise PlayerError("audio-only safety image is unavailable")
-        return MediaItem(
-            media_id=AUDIO_ONLY_ID,
-            kind="video",
-            title="Audio Only",
-            path=path,
-            relative_path=path.name,
-            size=path.stat().st_size,
-            duration=0.0,
-            has_audio=False,
-            fingerprint="built-in-audio-only-guard",
-        )
-
     def _start_audio_only_guard_locked(self) -> bool:
         """Show a fullscreen still before soundtrack-only playback.
 
@@ -676,7 +631,7 @@ class DualAmbientPlayer:
             return False
         self._wait_for_hdmi()
         self._wake_display()
-        self._start_layer("video", self._audio_only_item(), True, False, 0)
+        self._start_layer("video", AUDIO_ONLY_ITEM, True, False, 0)
         self._release_layer_locked(layer)
         return True
 
@@ -828,11 +783,11 @@ class DualAmbientPlayer:
         while time.monotonic() < deadline:
             self._refresh_layer(layer)
             if layer.process is None:
-                raise PlayerError(layer.last_error or f"{kind} MPV exited during startup")
+                raise PlayerError(layer.last_error or f"{kind} MPV exited during startup", "unavailable")
             if layer.ipc_path.exists():
                 return
             time.sleep(0.05)
-        raise PlayerError(f"{kind} MPV IPC socket did not become ready")
+        raise PlayerError(f"{kind} MPV IPC socket did not become ready", "unavailable")
 
     def _release_layer_locked(self, layer: Layer) -> None:
         """Release one newly started layer without touching its peer."""
@@ -1038,7 +993,7 @@ class DualAmbientPlayer:
                 selected["soundtrack_random_start"] = False
             display_item = video_item
             if display_item is None and soundtrack_item is not None:
-                display_item = self._audio_only_item()
+                display_item = AUDIO_ONLY_ITEM
             self.stop()
             try:
                 if display_item is not None:
@@ -1076,29 +1031,9 @@ class DualAmbientPlayer:
                 result["composition"] = selected
                 return result
             except Exception as exc:
-                self.last_error = str(exc)
                 self.stop()
-                self.last_error = str(exc)
+                self.last_error = getattr(exc, "code", "unavailable")  # never a path/message
                 raise
-
-    def play_legacy(self, scene: str) -> dict[str, Any]:
-        if scene not in self.legacy_scenes:
-            if scene in self.unavailable_legacy_scenes:
-                raise PlayerError(
-                    f"legacy scene unavailable: {scene}: "
-                    f"{self.unavailable_legacy_scenes[scene]}"
-                )
-            raise PlayerError(f"unknown scene: {scene}")
-        return self.play(
-            {
-                "visual": self.legacy_scenes[scene],
-                "visual_enabled": True,
-                "video_loop": True,
-                "video_random_start": False,
-                "original_volume": 100,
-                "soundtrack": None,
-            }
-        )
 
     def pause(self, paused: bool, kind: str | None = None) -> dict[str, Any]:
         with self.lock:
@@ -1113,51 +1048,8 @@ class DualAmbientPlayer:
                     layer.paused = paused
                     active += 1
             if active == 0:
-                raise PlayerError("no requested playback layer is active")
+                raise PlayerError("no requested playback layer is active", "unavailable")
             return self.status()
-
-    def set_favorite(self, kind: str, media_id: str, value: Any) -> dict[str, Any]:
-        with self.lock:
-            self.catalog.get(kind, media_id)
-            favorite = strict_bool(value, "favorite")
-            values = set(self.state.data["favorites"][kind])
-            if favorite:
-                values.add(media_id)
-            else:
-                values.discard(media_id)
-            self.state.data["favorites"][kind] = sorted(values)
-            self.state.save()
-            return {"ok": True, "kind": kind, "id": media_id, "favorite": favorite}
-
-    def profiles(self) -> dict[str, Any]:
-        with self.lock:
-            return {
-                "ok": True,
-                "profiles": self.state.data["profiles"],
-                "profile_errors": dict(self.profile_errors),
-            }
-
-    def save_profile(self, mode: str, profile: Any) -> dict[str, Any]:
-        if not ID_RE.fullmatch(mode):
-            raise PlayerError("invalid profile id")
-        with self.lock:
-            normalized = self.validate_composition(profile)
-            self.state.data["profiles"][mode] = normalized
-            self.profile_errors.pop(mode, None)
-            self.state.save()
-            return {"ok": True, "mode": mode, "profile": normalized}
-
-    def play_profile(self, mode: str) -> dict[str, Any]:
-        with self.lock:
-            profile = self.state.data["profiles"].get(mode)
-            if profile is None:
-                raise PlayerError(f"unknown profile: {mode}")
-            try:
-                normalized = self.validate_composition(profile)
-            except PlayerError as exc:
-                self.profile_errors[mode] = str(exc)
-                raise PlayerError(f"profile unavailable: {mode}: {exc}") from exc
-            return self.play(normalized)
 
     def shutdown(self) -> None:
         with self.lock:
@@ -1165,24 +1057,69 @@ class DualAmbientPlayer:
 
 
 class AmbientHTTPServer(ThreadingHTTPServer):
+    """Threaded server with per-peer-class connection pools; connections beyond a pool are closed unanswered.
+
+    The pool is chosen by source IP before any byte is read, so non-allowlisted hosts dripping slow
+    requests can only exhaust their own MAX_UNLISTED_CONNECTIONS, never Home Assistant's slots.
+    """
+
     daemon_threads = True
     allow_reuse_address = True
+    player: DualAmbientPlayer
+    allowed_clients: frozenset[str]
+    allowed_hosts: frozenset[str]
+    auth_token: str
+    slots: threading.BoundedSemaphore
+    unlisted_slots: threading.BoundedSemaphore
+    held: dict  # request socket -> the pool it took a slot from
 
-    def __init__(self, address, handler, player: DualAmbientPlayer, clients: set[str]):
-        super().__init__(address, handler)
-        self.player = player
-        self.allowed_clients = clients
+    def client_allowed(self, host: str) -> bool:
+        return host in self.allowed_clients
+
+    def process_request(self, request, client_address) -> None:
+        pool = self.slots if self.client_allowed(client_address[0]) else self.unlisted_slots
+        if not pool.acquire(blocking=False):
+            self.close_request(request)
+            return
+        self.held[request] = pool
+        super().process_request(request, client_address)
+
+    def shutdown_request(self, request) -> None:
+        super().shutdown_request(request)
+        pool = self.held.pop(request, None)
+        if pool is not None:
+            pool.release()
+
+
+def default_hosts(host: str, port: int) -> frozenset[str]:
+    """Host header values accepted when allowed_hosts is not configured."""
+    names = {host, "localhost", "127.0.0.1"} if ipaddress.ip_address(host).is_loopback else {host}
+    return frozenset(value for name in names for value in (name, f"{name}:{port}"))
+
+
+def make_server(config: dict[str, Any]) -> AmbientHTTPServer:
+    """Build the player and bind (not yet serve) the HTTP server for a validated config."""
+    player = DualAmbientPlayer(config)
+    server = AmbientHTTPServer((config["bind_host"], config["port"]), Handler)
+    server.player = player
+    server.allowed_clients = frozenset(config["allowed_clients"])
+    server.auth_token = config["auth_token"]
+    server.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+    server.unlisted_slots = threading.BoundedSemaphore(MAX_UNLISTED_CONNECTIONS)
+    server.held = {}
+    server.allowed_hosts = frozenset(config["allowed_hosts"]) or default_hosts(
+        config["bind_host"], server.server_port
+    )
+    return server
 
 
 class Handler(BaseHTTPRequestHandler):
     server: AmbientHTTPServer
     protocol_version = "HTTP/1.1"
+    timeout = 10  # socket read timeout: a stalled client cannot pin a handler thread
 
     def log_message(self, message: str, *args: Any) -> None:
-        sys.stderr.write(
-            "%s - - [%s] %s\n"
-            % (self.client_address[0], self.log_date_time_string(), message % args)
-        )
+        LOGGER.info("%s %s", self.client_address[0], message % args)
 
     def _send_json(self, status: int, body: dict[str, Any]) -> None:
         payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
@@ -1193,18 +1130,41 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _rejection(self) -> tuple[HTTPStatus, str] | None:
+        """Guard order is part of the API: IP 403, Host 421, token 401, framing 411/400, JSON body 415."""
+        chunked = "Transfer-Encoding" in self.headers
+        length = (self.headers.get("Content-Length") or "0").strip()
+        if chunked or (self.command == "GET" and length != "0"):
+            self.close_connection = True  # an unread body must never be parsed as the next request
+        if not self.server.client_allowed(self.client_address[0]):
+            return HTTPStatus.FORBIDDEN, "forbidden"
+        if (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
+            return HTTPStatus.MISDIRECTED_REQUEST, "host_not_allowed"
+        presented = (self.headers.get("Authorization") or "").encode()
+        if not hmac.compare_digest(presented, f"Bearer {self.server.auth_token}".encode()):
+            return HTTPStatus.UNAUTHORIZED, "unauthorized"
+        if self.command in ("POST", "PUT", "PATCH"):
+            if chunked:
+                return HTTPStatus.LENGTH_REQUIRED, "length_required"
+            if not length.isdecimal():
+                return HTTPStatus.BAD_REQUEST, "invalid_content_length"
+            media_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if int(length) and media_type != "application/json":
+                return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"
+        return None
+
     def _authorized(self) -> bool:
-        if self.client_address[0] not in self.server.allowed_clients:
-            self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden"})
-            return False
-        return True
+        rejection = self._rejection()
+        if rejection is None:
+            return True
+        self.close_connection = True  # the unread body must not be parsed as the next request
+        self._send_json(rejection[0], {"ok": False, "error": rejection[1]})
+        return False
 
     def _body(self) -> dict[str, Any]:
-        try:
-            length = int(self.headers.get("Content-Length", "0") or "0")
-        except ValueError as exc:
-            raise PlayerError("invalid Content-Length") from exc
-        if length > 65536:
+        length = int(self.headers.get("Content-Length") or 0)  # framing validated by _rejection()
+        if length > MAX_REQUEST_BYTES:
+            self.close_connection = True
             raise PlayerError("request body is too large")
         if length == 0:
             return {}
@@ -1218,71 +1178,48 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_error(self, exc: Exception) -> None:
         if isinstance(exc, PlayerError):
-            self._send_json(HTTPStatus.CONFLICT, {"ok": False, "error": str(exc)})
+            LOGGER.warning("%s %s rejected (%s): %s", self.command, self.path, exc.code, exc)
+            self._send_json(HTTPStatus.CONFLICT, {"ok": False, "error": exc.code})
         else:
-            self.server.player.last_error = str(exc)
+            LOGGER.error("%s %s failed", self.command, self.path, exc_info=exc)
+            self.server.player.last_error = "unavailable"
             self._send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
-                {"ok": False, "error": "internal player error"},
+                {"ok": False, "error": "unavailable"},
             )
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if not self._authorized():
             return
         path = urlparse(self.path).path
         try:
-            if path in ("/health", "/v1/status", "/v2/status"):
+            if path in ("/health", "/v2/status"):
                 result = self.server.player.status()
             elif path == "/v2/catalog":
                 result = self.server.player.catalog_public()
-            elif path == "/v2/profiles":
-                result = self.server.player.profiles()
-            elif path.startswith("/v2/profiles/"):
-                mode = unquote(path.removeprefix("/v2/profiles/"))
-                profile_result = self.server.player.profiles()
-                profiles = profile_result["profiles"]
-                if mode not in profiles:
-                    raise PlayerError(f"unknown profile: {mode}")
-                error = profile_result["profile_errors"].get(mode)
-                result = {
-                    "ok": True,
-                    "mode": mode,
-                    "profile": profiles[mode],
-                    "available": error is None,
-                }
-                if error is not None:
-                    result["error"] = error
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
                 return
             self._send_json(HTTPStatus.OK, result)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any failure becomes a generic 409/500
             self._handle_error(exc)
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if not self._authorized():
             return
         path = urlparse(self.path).path
         try:
             body = self._body()
-            if path.startswith("/v1/play/"):
-                result = self.server.player.play_legacy(
-                    unquote(path.removeprefix("/v1/play/"))
-                )
-            elif path in ("/v1/stop", "/v2/stop"):
+            if path == "/v2/stop":
                 result = self.server.player.stop()
-            elif path in ("/v1/pause", "/v2/pause"):
+            elif path == "/v2/pause":
                 result = self.server.player.pause(True)
-            elif path in ("/v1/resume", "/v2/resume"):
+            elif path == "/v2/resume":
                 result = self.server.player.pause(False)
             elif path == "/v2/play":
                 result = self.server.player.play(body)
             elif path == "/v2/catalog/refresh":
                 result = self.server.player.refresh_catalog()
-            elif path.startswith("/v2/play-profile/"):
-                result = self.server.player.play_profile(
-                    unquote(path.removeprefix("/v2/play-profile/"))
-                )
             elif path == "/v2/video/stop":
                 result = self.server.player.stop("video")
             elif path == "/v2/soundtrack/stop":
@@ -1299,34 +1236,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
                 return
             self._send_json(HTTPStatus.OK, result)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - see do_GET
             self._handle_error(exc)
 
-    def do_PUT(self) -> None:  # noqa: N802
-        if not self._authorized():
-            return
-        path = urlparse(self.path).path
-        try:
-            body = self._body()
-            if path.startswith("/v2/profiles/"):
-                result = self.server.player.save_profile(
-                    unquote(path.removeprefix("/v2/profiles/")), body
-                )
-            elif path.startswith("/v2/favorites/"):
-                parts = path.split("/")
-                if len(parts) != 5 or parts[3] not in ("video", "soundtrack"):
-                    raise PlayerError("invalid favorite endpoint")
-                result = self.server.player.set_favorite(
-                    parts[3], unquote(parts[4]), body.get("favorite")
-                )
-            else:
-                self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
-                return
-            self._send_json(HTTPStatus.OK, result)
-        except Exception as exc:
-            self._handle_error(exc)
-
-    def do_PATCH(self) -> None:  # noqa: N802
+    def do_PATCH(self) -> None:
         if not self._authorized():
             return
         path = urlparse(self.path).path
@@ -1338,20 +1251,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not found"})
                 return
             self._send_json(HTTPStatus.OK, result)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - see do_GET
             self._handle_error(exc)
 
 
-def load_config(path: Path) -> dict[str, Any]:
-    config = json.loads(path.read_text(encoding="utf-8"))
+def config_from_dict(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate and normalise a configuration mapping. Port 0 (ephemeral) is accepted here for tests only."""
     required = {
         "bind_host",
-        "port",
         "allowed_clients",
+        "auth_token",
         "video_root",
         "soundtrack_root",
         "state_file",
-        "legacy_scenes",
     }
     missing = required - set(config)
     if missing:
@@ -1361,13 +1273,20 @@ def load_config(path: Path) -> dict[str, Any]:
         config["allowed_clients"] = [
             str(ipaddress.ip_address(value)) for value in config["allowed_clients"]
         ]
+        config["port"] = int(config.get("port", DEFAULT_PORT))
     except (TypeError, ValueError) as exc:
-        raise PlayerError("bind_host and allowed_clients must contain valid IP addresses") from exc
+        raise PlayerError("bind_host and allowed_clients must be IP addresses; port an integer") from exc
     if not config["allowed_clients"]:
         raise PlayerError("allowed_clients must not be empty")
-    port = int(config["port"])
-    if port != 8097:
-        raise PlayerError("controller port must remain 8097")
+    if not 0 <= config["port"] <= 65535:
+        raise PlayerError("port must be between 1 and 65535")
+    token = config["auth_token"]
+    if not isinstance(token, str) or not TOKEN_RE.fullmatch(token):
+        raise PlayerError("auth_token must be at least 32 printable ASCII characters without spaces")
+    hosts = config.setdefault("allowed_hosts", [])
+    if not isinstance(hosts, list) or not all(isinstance(host, str) and host for host in hosts):
+        raise PlayerError("allowed_hosts must be a list of host[:port] names")
+    config["allowed_hosts"] = [host.lower() for host in hosts]
     streams = config.get("soundtrack_streams", {})
     if not isinstance(streams, dict):
         raise PlayerError("soundtrack_streams must be a JSON object")
@@ -1388,22 +1307,25 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
+def load_config(path: Path) -> dict[str, Any]:
+    config = config_from_dict(json.loads(path.read_text(encoding="utf-8")))
+    if config["port"] == 0:
+        raise PlayerError("port must be between 1 and 65535")
+    return config
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = load_config(args.config)
-    player = DualAmbientPlayer(config)
     if args.check:
-        print(json.dumps(player.status(), sort_keys=True))
+        print(json.dumps(DualAmbientPlayer(config).status(), sort_keys=True))
         return 0
-    server = AmbientHTTPServer(
-        (config["bind_host"], int(config["port"])),
-        Handler,
-        player,
-        set(config["allowed_clients"]),
-    )
+    server = make_server(config)
+    player = server.player
     stopping = threading.Event()
 
     def stop_handler(_signum, _frame):
