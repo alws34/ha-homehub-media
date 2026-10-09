@@ -15,7 +15,7 @@ from custom_components.homehub_media.store import HomeHubStore
 
 
 def hub_with(options):
-    hub = MagicMock(); hub.options = options; hub.tv = AsyncMock(); hub.activity = AsyncMock()
+    hub = MagicMock(); hub.options = options; hub.tv = AsyncMock(); hub.activity = AsyncMock(); hub.apps = {}
     hub.pc_ambient = None; hub.library = None; hub.sign_path = lambda p, hours=24: p; return hub
 
 
@@ -398,24 +398,48 @@ async def test_youtube_on_the_pc_backend_plays_on_the_tv(hass):
     pc.stop.assert_not_awaited()
 
 
-async def test_youtube_health_stops_when_the_app_was_closed(hass):
+async def tick(hass, secs):
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=secs))
+    await hass.async_block_till_done()
+
+
+async def test_youtube_health_stops_when_youtube_leaves_the_screen(hass):
+    async_mock_service(hass, "scene", "create"); on = async_mock_service(hass, "scene", "turn_on")
+    hass.states.async_set("scene.chill", "x", {"entity_id": ["light.a"]})
+    am = await yt_manager(hass, scene="scene.chill")
+    tv, am._hub.apps = am._hub.tv, {"youtube": "3201234567890"}  # the id discovered on this TV
+    tv.available = True
+    tv.app_info.return_value = {"id": "3201234567890", "running": True, "visible": False}
+    await am.start("chill", {"visual": "star_night"})
+    await tick(hass, 31)  # grace period: not asked yet
+    assert am.mode == "chill" and tv.app_info.await_count == 0
+    am._started = time.monotonic() - 100
+    tv.app_info.return_value = {"running": True, "visible": True}  # YouTube on screen
+    await tick(hass, 62)
+    assert am.mode == "chill"
+    tv.app_info.side_effect = HomeAssistantError("timeout")  # one failed poll while the TV is available
+    await tick(hass, 93)
+    assert am.mode == "chill" and on[-1].data["entity_id"] == "scene.chill"
+    tv.app_info.side_effect = None
+    tv.app_info.return_value = {"running": True, "visible": False}  # HOME: YouTube keeps running, hidden
+    await tick(hass, 124)
+    assert am.mode == "off" and on[-1].data["entity_id"] == "scene.homehub_media_snapshot"
+    tv.app_info.assert_awaited_with("3201234567890")
+    tv.stop_youtube.assert_awaited_once_with("3201234567890")
+
+
+async def test_youtube_health_stops_when_the_tv_goes_off(hass):
     am = await yt_manager(hass)
     tv = am._hub.tv
-    tv.youtube_state.return_value = "stopped"
+    tv.available = True
+    tv.app_info.return_value = {"running": True, "visible": True}
     await am.start("chill", {"visual": "star_night"})
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))  # grace period: not asked yet
-    await hass.async_block_till_done()
-    assert am.mode == "chill" and tv.youtube_state.await_count == 0
     am._started = time.monotonic() - 100
-    tv.youtube_state.return_value = "unknown"  # TV unreachable: keep the mode
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=62))
-    await hass.async_block_till_done()
+    await tick(hass, 31)
     assert am.mode == "chill"
-    tv.youtube_state.return_value = "stopped"
-    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=93))
-    await hass.async_block_till_done()
-    assert am.mode == "off"
-    tv.stop_youtube.assert_awaited_once()
+    tv.available = False  # the hub's TV poll saw it go off
+    await tick(hass, 62)
+    assert am.mode == "off" and tv.app_info.await_count == 1
 
 
 async def test_youtube_mode_switch_is_warm_and_file_switch_starts_over(hass):
@@ -454,6 +478,14 @@ async def test_visuals_pool_picks_a_random_visual_each_start(hass, monkeypatch):
     await am.update({"visuals": ["rain"]})  # changes the pool for the next start, nothing restarts
     pc.patch.assert_not_awaited()  # an empty PATCH is an error on the PC
     assert am._comp["visual"] == "rain" and am._comp["visuals"] == ["rain"]
+    monkeypatch.setattr("custom_components.homehub_media.ambience.random.choice",
+                        lambda pool: pytest.fail(f"picked from {pool}"))
+    await am.save_mode("chill", {"visual": "rain", "visuals": ["ghost", "gone"]})  # all removed since
+    await am.start("chill")
+    assert pc.play.await_args.args[0]["visual"] == "rain"  # the mode's visual, never a removed id
+    await am.save_mode("chill", {"visuals": ["ghost"]})
+    await am.start("chill")
+    assert pc.play.await_args.args[0]["visual_enabled"] is False  # nothing left to show
     await am.stop()
 
 
@@ -473,6 +505,22 @@ async def test_refresh_catalog_adds_youtube_for_both_backends(hass, tmp_path):
     assert all("youtube_id" not in v for v in visuals)
     opts["ambience"]["backend"] = "pc"
     am._hub.pc_ambient = pc = AsyncMock()
-    pc.catalog.return_value = {"visuals": [], "soundtracks": []}
+    pc.catalog.return_value = {"visuals": [{"id": "embers", "title": "Embers"}], "soundtracks": []}
     await am.refresh_catalog()
-    assert [v["id"] for v in am.catalog()["visuals"]] == ["star_night", "fire"]
+    assert [v["id"] for v in am.catalog()["visuals"]] == ["embers", "star_night", "fire"]
+    pc.refresh.side_effect = HomeAssistantError("media PC down")
+    with pytest.raises(HomeAssistantError, match="media PC down"):  # still reported...
+        await am.refresh_catalog()
+    assert [v["id"] for v in am.catalog()["visuals"]] == ["embers", "star_night", "fire"]  # ...nothing lost
+
+
+async def test_youtube_is_offered_when_the_media_folder_cannot_be_read(hass):
+    opts = chill()
+    opts["ambience"]["youtube"] = {"Star night": "https://youtu.be/B5unCXpegAw"}
+    am = AmbienceManager(hass, hub_with(opts), HomeHubStore(hass))
+    am._scan_tv = MagicMock(side_effect=OSError("I/O error"))
+    await am.async_load()
+    await am.async_load_catalog()  # the startup load: no scan, no exception, an error for the card
+    assert am.error == "Cannot read the ambience media folder"
+    assert [v["id"] for v in am.catalog()["visuals"]] == ["star_night"]
+    await am.async_shutdown()

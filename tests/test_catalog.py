@@ -112,6 +112,15 @@ def test_youtube_items_keep_order_and_unique_ids():
             c.youtube_items(bad)
 
 
+def test_youtube_ids_for_names_without_latin_letters_come_from_the_video():
+    sunset, fire = {"שקיעה": VID}, {"🔥🔥": "fireFIREfir"}
+    assert [i["id"] for i in c.youtube_items({**sunset, **fire})] == ["yt_b5uncxpegaw", "yt_firefirefir"]
+    assert [i["id"] for i in c.youtube_items({**fire, **sunset})] == ["yt_firefirefir", "yt_b5uncxpegaw"]
+    item = c.youtube_items(sunset)[0]
+    assert item["title"] == "שקיעה" and c.ID_RE.fullmatch(item["id"])
+    assert c.youtube_items({"🔥 Fire": VID})[0]["id"] == "fire"  # Latin letters still name it
+
+
 def test_composition_visuals_pool():
     comp = c.validate_composition({"visuals": ["rain", "fire", "rain"]})
     assert comp["visuals"] == ["rain", "fire"] and comp["visual"] is None and comp["visual_enabled"] is True

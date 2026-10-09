@@ -144,6 +144,23 @@ async def test_catalog_signs_youtube_previews_and_hides_video_ids(hass, hass_ws_
     assert visual["preview"].startswith("/api/homehub_media/art/youtube/B5unCXpegAw?authSig=")
 
 
+async def test_visuals_through_the_service_schemas(hass, setup_entry):
+    amb = setup_entry.runtime_data.ambience
+    await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": ["rain", "fire", "rain"]},
+                                   blocking=True)
+    assert amb.composition("chill")["visuals"] == ["rain", "fire"]
+    await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": "rain"}, blocking=True)
+    assert amb.composition("chill")["visuals"] == ["rain"]  # one id is a list of one
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": [f"v{i}" for i in range(51)]},
+                                       blocking=True)
+    with pytest.raises(ServiceValidationError):  # ids are checked by the manager
+        await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": ["../x"]}, blocking=True)
+    amb.update = AsyncMock()
+    await hass.services.async_call(DOMAIN, "ambience_update", {"visuals": ["fire", "rain"]}, blocking=True)
+    amb.update.assert_awaited_once_with({"visuals": ["fire", "rain"]})
+
+
 async def test_set_volume_service(hass, setup_entry):
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(DOMAIN, "set_volume", {"level": 101}, blocking=True)

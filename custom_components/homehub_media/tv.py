@@ -15,6 +15,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from samsungtvws import async_connection
 from samsungtvws.async_remote import SamsungTVWSAsyncRemote
 from samsungtvws.exceptions import ConnectionFailure, UnauthorizedError
 from samsungtvws.remote import (
@@ -33,7 +34,6 @@ KEY_RE = re.compile(r"KEY_[A-Z0-9_]{1,32}")
 APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 REST_TIMEOUT = aiohttp.ClientTimeout(total=5)  # REST (8001) and DIAL (8080)
 WS_ERRORS = (ConnectionFailure, WebSocketException, OSError)
-CONNECT_TRIES, CONNECT_RETRY_SECS = 5, 0.7  # touch events before ms.channel.connect while the browser is open
 URL_VISIBLE_SECS = 5  # wait for the browser to come to the front after a URL launch
 # ponytail: calibration knobs. A cold YouTube start shows the "who's watching" picker, whose timing varies.
 YT_COLD_WAIT = 8  # s from the first DIAL launch to the OK that picks the profile
@@ -47,6 +47,22 @@ FLAGS = {  # TV event -> (attribute, value)
     "ms.remote.touchEnable": ("pointer_active", True),
     "ms.remote.touchDisable": ("pointer_active", False),
 }
+# ponytail: while its browser is open the TV sends touch events before ms.channel.connect; samsungtvws then fails
+# the connect (and leaks the socket). Drop this once samsungtvws ignores them itself.
+async_connection.IGNORE_EVENTS_AT_STARTUP = (
+    *async_connection.IGNORE_EVENTS_AT_STARTUP, "ms.remote.touchEnable", "ms.remote.touchDisable")
+
+
+class TVRemote(SamsungTVWSAsyncRemote):
+    """Hands every TV event to `on_event`, including those that arrive before the connect reply."""
+
+    def __init__(self, *args: Any, on_event: Callable[[str], None], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._on_tv_event = on_event
+
+    def _websocket_event(self, event: str, response: dict[str, Any]) -> None:  # startup and listen loop alike
+        super()._websocket_event(event, response)
+        self._on_tv_event(event)
 
 
 class PairingDenied(HomeAssistantError):
@@ -98,7 +114,7 @@ class SamsungTV:
             setattr(self, attr, value)
             self._notify()
 
-    def _on_event(self, event: str, _response: Any) -> None:
+    def _on_event(self, event: str) -> None:
         if flag := FLAGS.get(event):
             if flag[0] == "keyboard_active":
                 self._text_sent = False  # new IME session: broadcast textReceived again
@@ -110,8 +126,10 @@ class SamsungTV:
                 if self._remote is None or not self._remote.is_alive():
                     if self._remote is not None:  # socket died since the last command
                         self._set_flag("available", False)
+                    self._remote = TVRemote(self.host, token=self.token, port=self.port, timeout=5, key_press_delay=0,
+                                            name=CLIENT_NAME, on_event=self._on_event)
                     async with asyncio.timeout(10):
-                        self._remote = await self._connect()
+                        await self._remote.start_listening()  # opens the socket itself
                     if self._remote.token != self.token:  # TV rotated the token; Hub persists it
                         self.token = self._remote.token
                         self._notify()
@@ -123,22 +141,6 @@ class SamsungTV:
                     raise PairingDenied("The TV refused the token, pair again") from err
                 raise CannotConnect("TV is off or unreachable") from err
         self._set_flag("available", True)
-
-    async def _connect(self) -> SamsungTVWSAsyncRemote:
-        """Open a listening remote; retried while the TV sends touch events before its connect reply."""
-        for attempt in range(1, CONNECT_TRIES + 1):
-            remote = SamsungTVWSAsyncRemote(self.host, token=self.token, port=self.port, timeout=5,
-                                            key_press_delay=0, name=CLIENT_NAME)
-            try:
-                await remote.start_listening(self._on_event)  # opens the socket itself
-                return remote
-            except ConnectionFailure as err:  # samsungtvws passes the unexpected event's dict
-                event = err.args[0].get("event") if err.args and isinstance(err.args[0], dict) else None
-                if not str(event).startswith("ms.remote.touch") or attempt == CONNECT_TRIES:
-                    raise
-                _LOGGER.debug("TV sent %s before connecting, retrying", event)
-            await asyncio.sleep(CONNECT_RETRY_SECS)
-        raise AssertionError("unreachable")
 
     async def _rest(self, method: str, path: str = "") -> Any:
         """None on 404; parsed JSON for GET, True for other methods."""
@@ -187,14 +189,23 @@ class SamsungTV:
         await self._send(*(SendRemoteKey.hold(key, hold_secs) if hold_secs else [SendRemoteKey.click(key)]))
 
     async def launch(self, app_id: str, meta_tag: str = "", action_type: str = "DEEP_LINK") -> None:
-        """REST first (fast); the WebSocket for a metaTag or when REST fails. The TV never replies to a
+        """REST first (fast); the WebSocket for a metaTag or when REST itself fails. The TV never replies to a
         WebSocket launch (verified on Tizen 6.5), so that one is fire-and-forget."""
         path = _app_path(app_id)
         if not meta_tag:
-            with contextlib.suppress(HomeAssistantError):
-                if await self._rest("POST", path) is not None:
-                    return
+            try:
+                launched = await self._rest("POST", path)
+            except HomeAssistantError:  # REST down or erroring: the WebSocket may still work
+                pass
+            else:
+                if launched is None:
+                    raise ServiceValidationError(f"{app_id} is not installed on the TV")
+                return
         await self._send(ChannelEmitCommand.launch_app(app_id, action_type, meta_tag))
+
+    async def app_info(self, app_id: str) -> dict | None:
+        """REST app status ({"running": bool, "visible": bool, ...}); None when not installed."""
+        return await self._rest("GET", _app_path(app_id))
 
     async def open_url(self, url: str) -> None:
         parts = urlsplit(url)
@@ -202,10 +213,9 @@ class SamsungTV:
             raise ServiceValidationError("Only http(s) URLs up to 2048 characters can be opened")
         await self.launch("org.tizen.browser", url, "NATIVE_LAUNCH")
         # 2021+ Samsung TVs start the browser hidden for a remote URL launch, so nothing shows
-        path = _app_path(self.browser_id)
         for _ in range(URL_VISIBLE_SECS * 2):
             await asyncio.sleep(0.5)
-            if (await self._rest("GET", path) or {}).get("visible"):
+            if (await self.app_info(self.browser_id) or {}).get("visible"):
                 return
         raise HomeAssistantError("This TV does not allow opening web pages remotely")
 
@@ -249,11 +259,12 @@ class SamsungTV:
         await asyncio.sleep(YT_WARM_WAIT)
         await self.send_key("KEY_ENTER")  # player overlay -> fullscreen
 
-    async def stop_youtube(self) -> None:
+    async def stop_youtube(self, app_id: str) -> None:
+        """Close YouTube over DIAL; REST (YouTube's Tizen `app_id`) when DIAL fails."""
         with contextlib.suppress(CannotConnect):
             if (await self._dial("DELETE", run=True))[0] in (200, 204, 404):  # 404: not running
                 return
-        await self._rest("DELETE", _app_path(APP_CATALOG["youtube"]["ids"][0]))
+        await self._rest("DELETE", _app_path(app_id))
 
     async def restart_app(self, app_id: str) -> None:
         path = _app_path(app_id)
