@@ -1,0 +1,33 @@
+blueprint:
+  name: HomeHub Media - stop ambience when the TV moves on
+  description: >-
+    Stops HomeHub ambience (and restores the lights) when the chosen entity changes, for example the TV's
+    source, current app or play state. Changes in the first 30 seconds after ambience starts are ignored so
+    the ambience start itself never stops it.
+  domain: automation
+  source_url: https://github.com/alws34/ha-homehub-media/blob/main/blueprints/automation/homehub_media/stop_ambience_on_app.yaml
+  input:
+    watched:
+      name: Entity to watch
+      description: An entity whose change means someone started watching something (TV media player, current-app sensor, ...).
+      selector:
+        entity: {}
+    ambience_mode:
+      name: HomeHub ambience mode
+      default: select.homehub_media_ambience_mode
+      selector:
+        entity:
+          filter: [{ domain: select, integration: homehub_media }]
+mode: single
+variables:
+  ambience_entity: !input ambience_mode
+triggers:
+  - trigger: state
+    entity_id: !input watched
+conditions:
+  - condition: template
+    value_template: >-
+      {{ not is_state(ambience_entity, 'off')
+         and (now() - states[ambience_entity].last_changed).total_seconds() > 30 }}
+actions:
+  - action: homehub_media.ambience_stop
