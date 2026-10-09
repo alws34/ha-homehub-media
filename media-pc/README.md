@@ -106,9 +106,9 @@ Edit `/etc/homehub-media-hub/coordinator.json`:
 
 Create one browser service per client by copying `systemd-user/browser-client.service.template`: replace the app
 name, browser executable and local URL, and save it under the unit name used in `coordinator.json`, for example
-`~/.config/systemd/user/jellyfin-browser.service`. The template sets `NoNewPrivileges=true` and `PrivateTmp=true`.
-Snap-packaged browsers (Ubuntu's default Firefox and Chromium) do not start with `NoNewPrivileges=true`, because
-`snap-confine` needs elevated privileges: install a `.deb` or tarball browser, or delete that line.
+`~/.config/systemd/user/jellyfin-browser.service`. The template ships `NoNewPrivileges=true` and `PrivateTmp=true`
+commented out, because snap-packaged browsers (Ubuntu's default Firefox and Chromium) do not start with
+`NoNewPrivileges=true` (`snap-confine` needs elevated privileges). With a `.deb` or tarball browser, uncomment them.
 
 ```bash
 systemctl --user daemon-reload
@@ -145,7 +145,7 @@ Details are only in `journalctl --user -u ambient-player -u homehub-media-hub-co
 ## Service limits and sandboxing
 
 Both daemon units run sandboxed (`ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=true`, no
-capabilities, `@system-service` system calls) and capped at `MemoryMax=512M` and `TasksMax=64` (threads and processes,
+capabilities, `@system-service` system calls) and capped at `MemoryMax=512M` and `TasksMax=128` (threads and processes,
 including the mpv players), so a runaway request flood or player cannot take the PC down.
 `systemctl --user status ambient-player` shows current use against both limits. If 4K videos make mpv fail to
 start or get killed, raise the limits with `systemctl --user edit ambient-player` (for example `MemoryMax=1G` and

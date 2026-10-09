@@ -10,11 +10,11 @@ Environment=WAYLAND_DISPLAY=wayland-0
 Environment=XDG_RUNTIME_DIR=%t
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
 ExecStart=YOUR_BROWSER_EXECUTABLE --new-window --kiosk --no-first-run YOUR_LOCAL_APP_URL
-# Basic hardening that a GUI browser tolerates. NoNewPrivileges=true breaks snap-packaged browsers (snap-confine
-# needs elevated privileges): use a .deb/tarball browser or delete that line. A start failure with status
-# 226/NAMESPACE means the user manager cannot set up PrivateTmp; see media-pc/README.md.
-NoNewPrivileges=true
-PrivateTmp=true
+# Optional hardening for a .deb/tarball browser. Left off by default because Ubuntu's Firefox and Chromium are
+# snaps, and snap-confine fails under NoNewPrivileges. A 226/NAMESPACE start failure means the user manager
+# cannot set up PrivateTmp; see media-pc/README.md.
+#NoNewPrivileges=true
+#PrivateTmp=true
 KillMode=control-group
 Restart=no
 

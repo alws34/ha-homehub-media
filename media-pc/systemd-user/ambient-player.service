@@ -29,7 +29,7 @@ RestrictSUIDSGID=true
 SystemCallFilter=@system-service
 CapabilityBoundingSet=
 MemoryMax=512M
-TasksMax=64
+TasksMax=128
 UMask=0077
 
 [Install]
