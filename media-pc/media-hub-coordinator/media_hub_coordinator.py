@@ -743,10 +743,7 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
-            if self.path == "/v1/open":  # legacy: the first configured client
-                first = next(iter(self.server.coordinator.config.clients))
-                self._send(HTTPStatus.OK, self.server.coordinator.open(first))
-            elif self.path.startswith("/v1/open/"):
+            if self.path.startswith("/v1/open/"):
                 mode = self.path.removeprefix("/v1/open/")
                 self._send(HTTPStatus.OK, self.server.coordinator.open(mode))
             elif self.path == "/v1/close":

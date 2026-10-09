@@ -10,6 +10,21 @@ integration in Home Assistant talks to them; HACS does not install anything here
 Every request must come from an `allowed_clients` IP, carry `Host: <bind host>:<port>` and
 `Authorization: Bearer <auth_token>`, and send JSON bodies as `application/json`.
 
+Endpoints (everything else is 404):
+
+| Daemon | Endpoint | Used for |
+|---|---|---|
+| ambience player | `GET /health`, `GET /v2/status` | status of both layers and catalog counts |
+| | `GET /v2/catalog`, `POST /v2/catalog/refresh` | list or rescan visuals, soundtracks and radio streams |
+| | `POST /v2/play` | start a composition (`visual`, `soundtrack`, loop, random start, volumes) |
+| | `PATCH /v2/state` | change one or both layers, e.g. `{"video": {"volume": 20}}` or `{"soundtrack": {"enabled": false}}`; a layer not named is never touched |
+| | `POST /v2/stop` | stop both layers |
+| coordinator | `GET /health`, `GET /v1/status` | liveness; which client is active |
+| | `POST /v1/open/<client>`, `POST /v1/close` | start a configured browser client, or stop it |
+| | `POST /v1/remote/<command>` | D-pad, tab, select, back, home, play/pause, stop, enter, backspace, clear |
+| | `POST /v1/keyboard/text` | `{"text": ...}`: 1-100 printable ASCII characters |
+| | `POST /v1/pointer/move`, `/v1/pointer/scroll`, `/v1/pointer/click` | `{"dx", "dy"}` up to ±160, `{"dy"}` up to ±240, `{"button": "left"\|"right"}` |
+
 ## 1. Prerequisites
 
 The coordinator uses the GNOME/Mutter D-Bus remote-input API, so the user must be logged into the graphical session
@@ -31,15 +46,18 @@ sudo install -d -o "$USER" -g "$USER" \
 
 Point Jellyfin's library at the media root if the same ambience videos/music should appear in Jellyfin.
 
-## 2. Generate a token
+## 2. Generate two tokens
+
+Use a separate token for each daemon, so a leaked ambience token cannot inject keystrokes through the coordinator:
 
 ```bash
-python3 -c 'import secrets;print(secrets.token_urlsafe(32))'
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'   # ambience player
+python3 -c 'import secrets;print(secrets.token_urlsafe(32))'   # coordinator
 ```
 
-Put it in both JSON configs (`auth_token`, at least 32 printable ASCII characters without spaces; the daemons
-refuse to start otherwise) and in
-Home Assistant → Settings → Devices & services → HomeHub Media → Configure → Media PC. Treat it like a password.
+Put each in its daemon's JSON config (`auth_token`, at least 32 printable ASCII characters without spaces; the
+daemons refuse to start otherwise) and in the matching field of Home Assistant → Settings → Devices & services →
+HomeHub Media → Configure → Media PC. Treat them like passwords.
 
 ## 3. Install the ambience player
 
@@ -53,7 +71,7 @@ install -m 0644 media-pc/systemd-user/ambient-player.service ~/.config/systemd/u
 
 Edit `/etc/ambient-player/config.json` and replace every `YOUR_` value: `bind_host` is the Ubuntu PC's LAN IP,
 `allowed_clients` the Home Assistant server's LAN IP (never a loopback address: any local process could then use
-the API), `auth_token` the token from step 2. Optional keys:
+the API), `auth_token` the ambience token from step 2. Optional keys:
 `port` (default 8097), `allowed_hosts` (Host header values to accept; default `<bind_host>` and
 `<bind_host>:<port>`, set it if Home Assistant reaches the PC by a host name), `video_aliases`,
 `soundtrack_aliases`, and `soundtrack_streams` (credential-free HTTPS radio URLs). Files that cannot be read or probed
@@ -80,28 +98,43 @@ Edit `/etc/homehub-media-hub/coordinator.json`:
 
 - `listen_host` / `allowed_clients`: the Ubuntu and Home Assistant IP addresses. Do not allowlist `127.0.0.1` or
   any other loopback address (the kiosk browser and every local process could then inject keystrokes).
-- `auth_token`: the token from step 2 (`allowed_hosts` works as for the ambience player).
+- `auth_token`: the coordinator token from step 2 (`allowed_hosts` works as for the ambience player).
 - `clients`: any set of `name: {unit, home_url, tab_navigation}` (names are lowercase slugs, e.g. `jellyfin`,
   `plex`); `home_url` must be a loopback `http://` URL, `unit` the user service that launches it. Set
   `"tab_navigation": true` for web apps that use browser focus order instead of TV-style arrows (Sonarr, Radarr):
-  left/right then send Shift+Tab/Tab. A bare `POST /v1/open` opens the first configured client.
+  left/right then send Shift+Tab/Tab.
 
 Create one browser service per client by copying `systemd-user/browser-client.service.template`: replace the app
 name, browser executable and local URL, and save it under the unit name used in `coordinator.json`, for example
-`~/.config/systemd/user/jellyfin-browser.service`.
+`~/.config/systemd/user/jellyfin-browser.service`. The template sets `NoNewPrivileges=true` and `PrivateTmp=true`.
+Snap-packaged browsers (Ubuntu's default Firefox and Chromium) do not start with `NoNewPrivileges=true`, because
+`snap-confine` needs elevated privileges: install a `.deb` or tarball browser, or delete that line.
 
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now homehub-media-hub-coordinator.service
 ```
 
-## 5. Check
+## 5. Firewall (required)
+
+Let only Home Assistant reach the two ports. The per-IP connection pools stop slow-request floods from other LAN
+hosts, but not a SYN/accept-backlog flood, which only a firewall can drop.
+
+```bash
+sudo ufw default deny incoming
+sudo ufw allow OpenSSH        # only if you manage this PC over SSH; do this before enabling
+sudo ufw allow from YOUR_HOME_ASSISTANT_IP to any port 8097,8098 proto tcp
+sudo ufw enable
+sudo ufw status verbose
+```
+
+## 6. Check
 
 From the Home Assistant machine (an allowed client):
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" http://YOUR_UBUNTU_HOST_IP:8097/v2/status
-curl -H "Authorization: Bearer $TOKEN" http://YOUR_UBUNTU_HOST_IP:8098/v1/status
+curl -H "Authorization: Bearer $AMBIENCE_TOKEN" http://YOUR_UBUNTU_HOST_IP:8097/v2/status
+curl -H "Authorization: Bearer $COORDINATOR_TOKEN" http://YOUR_UBUNTU_HOST_IP:8098/v1/status
 ```
 
 Errors: 403 IP not allowed, 421 Host not allowed, 401 bad or missing token, 411 chunked body (send
@@ -109,17 +142,21 @@ Errors: 403 IP not allowed, 421 Host not allowed, 401 bad or missing token, 411 
 Details are only in `journalctl --user -u ambient-player -u homehub-media-hub-coordinator`. Hosts outside
 `allowed_clients` share 2 connections (enough for their 403); allowlisted hosts get 16 of their own.
 
-## Firewall
+## Service limits and sandboxing
 
-Recommended: let only Home Assistant reach the two ports. The per-IP connection pools stop slow-request floods from
-other LAN hosts, but not a SYN/accept-backlog flood, which only a firewall can drop.
+Both daemon units run sandboxed (`ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=true`, no
+capabilities, `@system-service` system calls) and capped at `MemoryMax=512M` and `TasksMax=64` (threads and processes,
+including the mpv players), so a runaway request flood or player cannot take the PC down.
+`systemctl --user status ambient-player` shows current use against both limits. If 4K videos make mpv fail to
+start or get killed, raise the limits with `systemctl --user edit ambient-player` (for example `MemoryMax=1G` and
+`TasksMax=128`).
 
-```bash
-sudo ufw default deny incoming
-sudo ufw allow OpenSSH        # only if you manage this PC over SSH; do this before enabling
-sudo ufw allow from YOUR_HOME_ASSISTANT_IP to any port 8097,8098 proto tcp
-sudo ufw enable
-```
+`systemd-analyze --user security ambient-player.service` lists which protections are active. If a unit fails
+with `status=226/NAMESPACE` (`journalctl --user -u <unit>`), the user manager could not create the namespace the
+sandbox needs. Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor
+(`sysctl kernel.apparmor_restrict_unprivileged_userns`). Prefer a drop-in (`systemctl --user edit <unit>`) that turns
+off only the namespace options (`PrivateTmp=false`, `ProtectSystem=false`, `ProtectHome=false`, and empty
+`ReadOnlyPaths=` / `ReadWritePaths=` lines) over lifting the restriction for the whole system.
 
 ## Upgrading from the YAML bundle
 
@@ -130,4 +167,7 @@ sudo ufw enable
   opening a browser client), and `stop` now sends Escape instead of Alt+Left. Add `"tab_navigation": true` to the
   `sonarr` and `radarr` clients to keep their Tab-based left/right navigation.
 - Remove `127.0.0.1` from both `allowed_clients` lists.
-- Re-copy both `.service` files (new sandboxing; the ambience unit needs `ReadWritePaths=%t` for mpv's sockets).
+- Removed endpoints: `/v2/pause`, `/v2/resume`, the per-layer `/v2/video/*` and `/v2/soundtrack/*` routes (use
+  `PATCH /v2/state`) and the bare `POST /v1/open` (name the client: `/v1/open/<client>`).
+- Re-copy both `.service` files and your browser units from the template (new sandboxing and resource limits; the
+  ambience unit needs `ReadWritePaths=%t` for mpv's sockets).
