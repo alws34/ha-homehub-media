@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from homeassistant.components import frontend
@@ -13,6 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import llm
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 
@@ -23,6 +25,12 @@ from .hub import Hub
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SELECT, Platform.SWITCH, Platform.SENSOR]
+_SECRET_RE = re.compile("token|SendInputString|metaTag", re.IGNORECASE)
+
+
+def _no_secrets(record: logging.LogRecord) -> bool:
+    """samsungtvws logs the TV token, typed text and the signed page URL at INFO/DEBUG."""
+    return not _SECRET_RE.search(record.getMessage())
 
 
 def _platforms(hub: Hub) -> list[Platform]:
@@ -30,6 +38,9 @@ def _platforms(hub: Hub) -> list[Platform]:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    # a logger's filters skip its children's records, so each module logger gets it (tv.py imported them all)
+    for name in ["samsungtvws", *(n for n in list(logging.root.manager.loggerDict) if n.startswith("samsungtvws."))]:
+        logging.getLogger(name).addFilter(_no_secrets)  # a no-op when already added
     api.async_register(hass)
     await hass.http.async_register_static_paths(
         [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "www"), cache_headers=False)])
@@ -59,3 +70,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # then on_unload stops the hub
     return await hass.config_entries.async_unload_platforms(entry, _platforms(entry.runtime_data))
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await Store(hass, 1, f"{DOMAIN}.data").async_remove()  # the ambience compositions and favourites

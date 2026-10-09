@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import time
 import unicodedata
 from functools import partial
 from typing import Any
@@ -15,24 +14,20 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.service import async_register_admin_service
 
 from .ambience import STATE_PATH
 from .const import ACTIVITIES, COMMANDS, DOMAIN, SIGNAL_UPDATE, TARGETS, TEXT_MAX
-from .hub import Hub, sign
+from .hub import Hub, loaded_hub, sign
+from .library import ART_MAX
 
 ART_KEY_RE = re.compile(r"[A-Za-z0-9_=-]{1,512}")
 ART_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}  # never SVG/HTML from HA's origin
-ART_MAX = 5 * 1024 * 1024
 SIGNED = ("/media/", "/api/homehub_media/art/")  # /local/... is public
 
 
-def _loaded(hass: HomeAssistant) -> Hub | None:
-    entries = hass.config_entries.async_loaded_entries(DOMAIN)
-    return entries[0].runtime_data if entries else None
-
-
 def _hub(hass: HomeAssistant) -> Hub:
-    if hub := _loaded(hass):
+    if hub := loaded_hub(hass):
         return hub
     raise ServiceValidationError("HomeHub Media is not set up")
 
@@ -53,7 +48,7 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 
     @callback
     def send() -> None:
-        if hub := _loaded(hass):  # looked up each time: the subscription survives entry reloads
+        if hub := loaded_hub(hass):  # looked up each time: the subscription survives entry reloads
             snap = hub.snapshot()
             snap["now_playing"] = [{**n, "image": _signed(hass, connection, n.get("image"))} for n in snap["now_playing"]]
             connection.send_message(websocket_api.event_message(msg["id"], snap))
@@ -63,15 +58,12 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     send()
 
 
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/catalog", vol.Optional("refresh", default=False): bool})
-@websocket_api.async_response
-async def ws_catalog(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    hub = _hub(hass)
-    if msg["refresh"]:
-        await hub.ambience.refresh_catalog()
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/catalog"})
+@callback
+def ws_catalog(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     connection.send_result(msg["id"], {
         kind: [{**item, "preview": _signed(hass, connection, item.get("preview"))} for item in items]
-        for kind, items in hub.ambience.catalog().items()})
+        for kind, items in _hub(hass).ambience.catalog().items()})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/library"})
@@ -105,12 +97,13 @@ COMPOSITION = {  # types only; the ambience manager validates ids and the merged
     vol.Optional("soundtrack_loop"): cv.boolean, vol.Optional("soundtrack_random_start"): cv.boolean,
     vol.Optional("soundtrack_volume"): _PCT,
 }
+ADMIN_SERVICES = ("refresh_catalog", "rescan_apps")  # disk/TV scans and option writes
 SERVICES: dict[str, tuple[dict, Any]] = {
     "remote": ({vol.Required("command"): vol.In(COMMANDS), vol.Optional("target"): vol.In(TARGETS)},
                lambda hub, d: hub.remote(**d)),
     "send_key": ({vol.Required("key"): vol.Match(r"^KEY_[A-Z0-9_]{1,32}\Z"),
                   vol.Optional("hold_secs"): vol.All(vol.Coerce(float), vol.Range(0, 5))},
-                 lambda hub, d: hub.send_key(**d)),
+                 lambda hub, d: hub.tv.send_key(**d)),
     "launch_app": ({vol.Required("app"): _APP}, lambda hub, d: hub.launch_app(**d)),
     "restart_app": ({vol.Required("app"): _APP}, lambda hub, d: hub.restart_app(**d)),
     "send_text": ({vol.Required("text"): _text, vol.Optional("target"): _TYPE_TARGET},
@@ -147,8 +140,7 @@ SERVICES: dict[str, tuple[dict, Any]] = {
 
 async def _call(run: Any, call: ServiceCall) -> None:
     hub = _hub(call.hass)
-    hub.last_command = time.monotonic()  # idle detection for auto ambience
-    await run(hub, call.data)
+    await hub.command(run(hub, call.data))
 
 
 # ---- views -----------------------------------------------------------------------------------------
@@ -160,9 +152,10 @@ class PageStateView(HomeAssistantView):
     url, name, requires_auth = STATE_PATH, "api:homehub_media:page_state", True
 
     async def get(self, request: web.Request) -> web.Response:
-        if not (hub := _loaded(request.app[KEY_HASS])):
-            raise web.HTTPNotFound
-        return self.json(hub.ambience.page_state(), headers={"Cache-Control": "no-store"})
+        hub = loaded_hub(request.app[KEY_HASS])
+        if not (state := hub and hub.ambience.page_state(request.query.get("sid"))):
+            raise web.HTTPNotFound  # not loaded, or not the current page session
+        return self.json(state, headers={"Cache-Control": "no-store"})
 
 
 class ArtView(HomeAssistantView):
@@ -171,7 +164,7 @@ class ArtView(HomeAssistantView):
     url, name, requires_auth = "/api/homehub_media/art/{server}/{key}", "api:homehub_media:art", True
 
     async def get(self, request: web.Request, server: str, key: str) -> web.Response:
-        lib = (hub := _loaded(request.app[KEY_HASS])) and hub.library
+        lib = (hub := loaded_hub(request.app[KEY_HASS])) and hub.library
         if not (srv := lib and lib.server(server)) or not ART_KEY_RE.fullmatch(key):
             raise web.HTTPNotFound
         try:
@@ -180,7 +173,6 @@ class ArtView(HomeAssistantView):
             raise web.HTTPNotFound from None
         except HomeAssistantError:
             raise web.HTTPBadGateway from None
-        # ponytail: library._req has already read the body; a streamed read with a limit there would also cap memory
         if content_type not in ART_TYPES or len(body) > ART_MAX:
             raise web.HTTPBadGateway
         return web.Response(body=body, content_type=content_type, headers={
@@ -193,6 +185,9 @@ def async_register(hass: HomeAssistant) -> None:
     for command in (ws_subscribe, ws_catalog, ws_library):
         websocket_api.async_register_command(hass, command)
     for name, (schema, run) in SERVICES.items():
-        hass.services.async_register(DOMAIN, name, partial(_call, run), vol.Schema(schema))
+        if name in ADMIN_SERVICES:
+            async_register_admin_service(hass, DOMAIN, name, partial(_call, run), vol.Schema(schema))
+        else:
+            hass.services.async_register(DOMAIN, name, partial(_call, run), vol.Schema(schema))
     hass.http.register_view(PageStateView())
     hass.http.register_view(ArtView())

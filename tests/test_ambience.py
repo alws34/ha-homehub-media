@@ -9,13 +9,14 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
 from custom_components.homehub_media import catalog as cat
-from custom_components.homehub_media.ambience import AmbienceManager
+from custom_components.homehub_media.activity import ActivityManager
+from custom_components.homehub_media.ambience import STATE_PATH, AmbienceManager
 from custom_components.homehub_media.store import HomeHubStore
 
 
 def hub_with(options):
     hub = MagicMock(); hub.options = options; hub.tv = AsyncMock(); hub.activity = AsyncMock()
-    hub.pc_ambient = None; hub.library = None; hub.sign_path = lambda p: p; return hub
+    hub.pc_ambient = None; hub.library = None; hub.sign_path = lambda p, hours=24: p; return hub
 
 
 async def test_lights_only_mode_snapshots_and_restores(hass):
@@ -83,7 +84,7 @@ async def test_pc_backend_sets_activity_before_mode_then_plays(hass):
     am = await manager(hass, chill("pc"))
     order = []
     am._hub.pc_ambient = AsyncMock()
-    am._hub.activity.set.side_effect = lambda a: order.append(("set", a, am.mode, am.uses_media))
+    am._hub.activity.set.side_effect = lambda a: order.append(("set", a, am.mode, am.uses_media)) or True
     am._hub.pc_ambient.play.side_effect = lambda c: order.append(("play", c["visual"]))
     await am.start("chill")
     assert order == [("set", "pc", "off", False), ("play", "rain")] and am.mode == "chill" and am.uses_media
@@ -102,34 +103,36 @@ async def test_pc_backend_sets_activity_before_mode_then_plays(hass):
 async def test_tv_update_bumps_version_and_page_state(hass):
     am = await manager(hass, chill())
     await am.start("chill")
-    v0, s0 = am.page_version, am.page_state()
+    sid = am._sid
+    v0, s0 = am.page_version, am.page_state(sid)
     assert s0["visual"]["volume"] == 0.2 and s0["stop"] is False
     await am.update({"original_volume": 50})
-    s1 = am.page_state()
+    s1 = am.page_state(sid)
     assert s1["version"] == v0 + 1 and s1["visual"]["volume"] == 0.5
     with pytest.raises(ServiceValidationError):
         await am.update({"original_volume": 101})
     with pytest.raises(ServiceValidationError):  # merged composition is re-validated in full
         await am.update({"visual": None})
-    assert am.page_state()["version"] == v0 + 1
+    assert am.page_state(sid)["version"] == v0 + 1
     await am.stop()
-    s2 = am.page_state()
-    assert s2["stop"] is True and s2["visual"] is None and s2["version"] > v0 + 1
+    s2 = am.page_state(sid)  # the page gets its stop once, without a next URL; the session then ends
+    assert s2["stop"] is True and s2["visual"] is None and s2["version"] > v0 + 1 and s2["next"] is None
+    assert am.page_state(sid) is None
     am._hub.tv.send_key.assert_awaited_with("KEY_HOME")
 
 
 async def test_page_state_signs_urls_and_includes_next(hass):
     radio = cat.radio_items({"radio_x": "https://example.com/live"})
     am = await manager(hass, chill(radio={"radio_x": "https://example.com/live"}), soundtracks=radio)
-    am._hub.sign_path = lambda p: f"{p}?authSig=x"
+    am._hub.sign_path = lambda p, hours=24: f"{p}|{hours}h"
     await am.start("chill", {"visual": "rain", "soundtrack": "radio_x", "soundtrack_volume": 40})
     before = am.page_last_seen
-    state = am.page_state()
+    state = am.page_state(am._sid)
     assert am.page_last_seen >= before
-    assert state["visual"]["url"] == "/media/local/homehub/ambience/videos/rain.mp4?authSig=x"
+    assert state["visual"]["url"] == "/media/local/homehub/ambience/videos/rain.mp4|24h"
     assert state["soundtrack"] == {"url": "https://example.com/live", "stream": True, "loop": False,
                                    "random_start": False, "volume": 0.4}
-    assert state["next"] == "/api/homehub_media/page/state?authSig=x" and state["fade_secs"] is None
+    assert state["next"] == f"{STATE_PATH}?sid={am._sid}|2h" and state["fade_secs"] is None
     await am.stop()
 
 
@@ -141,7 +144,7 @@ async def test_sleep_timer_fades_then_stops(hass):
     assert am.sleep_until is not None and am.sleep_until > dt_util.utcnow() + timedelta(seconds=100)
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
-    assert am.page_state()["fade_secs"] == 60 and am.mode == "chill"
+    assert am.page_state(am._sid)["fade_secs"] == 60 and am.mode == "chill"
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=122))
     await hass.async_block_till_done()
     assert am.mode == "off" and am.sleep_until is None
@@ -216,7 +219,7 @@ async def test_switch_keeps_snapshot_and_swaps_tv_page_in_place(hass):
     v = am.page_version
     await am.start("b")
     assert len(create) == 1 and [c.data["entity_id"] for c in on] == ["scene.a", "scene.b"]
-    assert am.page_version > v and am.page_state()["stop"] is False and am.mode == "b"
+    assert am.page_version > v and am.page_state(am._sid)["stop"] is False and am.mode == "b"
     am._hub.tv.open_url.assert_awaited_once()            # no reload, no HOME between modes
     am._hub.tv.send_key.assert_not_awaited()
     am._hub.activity.set.assert_not_awaited()
@@ -306,7 +309,7 @@ async def test_idle_auto_start(hass, tmp_path):
                         (("morning", "06:00"), ("afternoon", "12:00"), ("evening", "18:00"), ("night", "22:00"))}
     opts["dayparts"]["idle_minutes"] = 10
     am = AmbienceManager(hass, hub_with(opts), HomeHubStore(hass))
-    am._hub.activity.current = "tv"; am._hub.tv.available = True
+    am._hub.activity.current = "tv"; am._hub.activity.is_on = lambda: True
     am._hub.last_command = time.monotonic() - 3600
     await am.async_load()
     await am.async_load_catalog()
@@ -319,3 +322,30 @@ async def test_idle_auto_start(hass, tmp_path):
     assert am.mode == "chill"
     await am.async_shutdown()
     assert am.mode == "off"
+
+
+async def test_stale_page_session_is_rejected(hass):
+    am = await manager(hass, chill())
+    await am.start("chill")
+    old = am._sid
+    am.page_last_seen = 0.0
+    assert am.page_state(None) is None and am.page_state("guess") is None
+    assert am.page_last_seen == 0.0  # no heartbeat from a foreign sid
+    am._sid = None
+    await am._play(am._comp)  # a fresh page open starts a new session
+    assert am._sid != old and am.page_state(old) is None and am.page_last_seen > 0.0
+    await am.stop()
+
+
+async def test_superseded_activity_opens_no_page(hass):
+    am = await manager(hass, chill())
+    hub = am._hub
+    hub.ambience, hub.activity = am, ActivityManager(hass, hub)  # activity "off": start needs the TV first
+    hub.tv.wake.side_effect = asyncio.Event().wait  # the TV takes forever to wake
+    starting = asyncio.create_task(am.start("chill"))
+    while not hub.tv.wake.await_count:
+        await asyncio.sleep(0)
+    assert await hub.activity.set("off") is True  # the user switches everything off meanwhile
+    await asyncio.wait_for(starting, 1)
+    hub.tv.open_url.assert_not_awaited()
+    assert am.mode == "off" and hub.activity.current == "off"
