@@ -2,7 +2,6 @@
   "bind_host": "YOUR_UBUNTU_HOST_IP",
   "port": 8097,
   "allowed_clients": [
-    "127.0.0.1",
     "YOUR_HOME_ASSISTANT_IP"
   ],
   "auth_token": "YOUR_AUTH_TOKEN",

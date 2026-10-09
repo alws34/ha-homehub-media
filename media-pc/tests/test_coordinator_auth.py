@@ -60,11 +60,29 @@ class AuthTest(unittest.TestCase):
         self.assertEqual(self.req("POST", "/v1/keyboard/text", {"Content-Type": "text/plain"},
                                   json.dumps({"text": "hi"})), 415)
 
+    def test_body_framing_and_strict_json_type(self):
+        json_body = {"Content-Type": "application/json"}
+        self.assertEqual(self.req("POST", "/v1/nope", {**json_body, "Transfer-Encoding": "chunked"}, "{}"), 411)
+        self.assertEqual(self.req("POST", "/v1/nope", {**json_body, "Content-Length": "abc"}, ""), 400)
+        self.assertEqual(self.req("POST", "/v1/nope", {"Content-Type": "application/jsonp"}, "{}"), 415)
+        self.assertEqual(self.req("POST", "/v1/nope", {"Content-Type": " Application/JSON; charset=utf-8"}, "{}"), 404)
+
     def test_short_token_rejected(self):
-        with self.assertRaises(co.CoordinatorError):
-            co.Config.from_dict({"listen_host": "127.0.0.1", "listen_port": 0, "allowed_clients": ["127.0.0.1"],
-                                 "auth_token": "short", "clients": {"a": {"unit": "a.service",
-                                 "home_url": "http://127.0.0.1/"}}})
+        for token in ("short", "t" * 20 + " " + "t" * 20):
+            with self.assertRaises(co.CoordinatorError):
+                co.Config.from_dict({"listen_host": "127.0.0.1", "listen_port": 0, "allowed_clients": ["127.0.0.1"],
+                                     "auth_token": token, "clients": {"a": {"unit": "a.service",
+                                     "home_url": "http://127.0.0.1/"}}})
+
+    def test_unlisted_peers_cannot_starve_allowlisted_clients(self):
+        pairs = [socket.socketpair() for _ in range(co.MAX_CONNECTIONS)]
+        try:
+            for server_end, _ in pairs:  # idle connections from a non-allowlisted LAN host
+                self.srv.process_request(server_end, ("192.0.2.66", 40000))
+            self.assertEqual(self.req("GET", "/health"), 200)
+        finally:
+            for _, client_end in pairs:
+                client_end.close()
 
     def test_ip_not_allowed_403_before_token(self):
         srv = start_server(["192.0.2.1"])

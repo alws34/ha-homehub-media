@@ -37,7 +37,8 @@ Point Jellyfin's library at the media root if the same ambience videos/music sho
 python3 -c 'import secrets;print(secrets.token_urlsafe(32))'
 ```
 
-Put it in both JSON configs (`auth_token`, at least 32 characters; the daemons refuse to start otherwise) and in
+Put it in both JSON configs (`auth_token`, at least 32 printable ASCII characters without spaces; the daemons
+refuse to start otherwise) and in
 Home Assistant → Settings → Devices & services → HomeHub Media → Configure → Media PC. Treat it like a password.
 
 ## 3. Install the ambience player
@@ -51,7 +52,8 @@ install -m 0644 media-pc/systemd-user/ambient-player.service ~/.config/systemd/u
 ```
 
 Edit `/etc/ambient-player/config.json` and replace every `YOUR_` value: `bind_host` is the Ubuntu PC's LAN IP,
-`allowed_clients` the Home Assistant server's LAN IP, `auth_token` the token from step 2. Optional keys:
+`allowed_clients` the Home Assistant server's LAN IP (never a loopback address: any local process could then use
+the API), `auth_token` the token from step 2. Optional keys:
 `port` (default 8097), `allowed_hosts` (Host header values to accept; default `<bind_host>` and
 `<bind_host>:<port>`, set it if Home Assistant reaches the PC by a host name), `video_aliases`,
 `soundtrack_aliases`, and `soundtrack_streams` (credential-free HTTPS radio URLs). Files that cannot be read or probed
@@ -76,10 +78,13 @@ install -m 0644 media-pc/systemd-user/homehub-media-hub-coordinator.service ~/.c
 
 Edit `/etc/homehub-media-hub/coordinator.json`:
 
-- `listen_host` / `allowed_clients`: the Ubuntu and Home Assistant IP addresses. Do not add `127.0.0.1`.
+- `listen_host` / `allowed_clients`: the Ubuntu and Home Assistant IP addresses. Do not allowlist `127.0.0.1` or
+  any other loopback address (the kiosk browser and every local process could then inject keystrokes).
 - `auth_token`: the token from step 2 (`allowed_hosts` works as for the ambience player).
-- `clients`: any set of `name: {unit, home_url}` (names are lowercase slugs, e.g. `jellyfin`, `plex`); `home_url`
-  must be a loopback `http://` URL, `unit` the user service that launches it.
+- `clients`: any set of `name: {unit, home_url, tab_navigation}` (names are lowercase slugs, e.g. `jellyfin`,
+  `plex`); `home_url` must be a loopback `http://` URL, `unit` the user service that launches it. Set
+  `"tab_navigation": true` for web apps that use browser focus order instead of TV-style arrows (Sonarr, Radarr):
+  left/right then send Shift+Tab/Tab. A bare `POST /v1/open` opens the first configured client.
 
 Create one browser service per client by copying `systemd-user/browser-client.service.template`: replace the app
 name, browser executable and local URL, and save it under the unit name used in `coordinator.json`, for example
@@ -99,8 +104,10 @@ curl -H "Authorization: Bearer $TOKEN" http://YOUR_UBUNTU_HOST_IP:8097/v2/status
 curl -H "Authorization: Bearer $TOKEN" http://YOUR_UBUNTU_HOST_IP:8098/v1/status
 ```
 
-Errors: 403 IP not allowed, 421 Host not allowed, 401 bad or missing token, 415 body not JSON, 409 `{"error": code}`.
-Details are only in `journalctl --user -u ambient-player -u homehub-media-hub-coordinator`.
+Errors: 403 IP not allowed, 421 Host not allowed, 401 bad or missing token, 411 chunked body (send
+`Content-Length`), 400 invalid `Content-Length`, 415 body not `application/json`, 409 `{"error": code}`.
+Details are only in `journalctl --user -u ambient-player -u homehub-media-hub-coordinator`. Hosts outside
+`allowed_clients` share 2 connections (enough for their 403); allowlisted hosts get 16 of their own.
 
 ## Upgrading from the YAML bundle
 
@@ -108,5 +115,7 @@ Details are only in `journalctl --user -u ambient-player -u homehub-media-hub-co
 - Ambience profiles, favourites and legacy `/v1` scenes moved to Home Assistant; `legacy_scenes`,
   `default_profiles` and `audio_only_image` are ignored and can be deleted. The state file is migrated automatically.
 - The coordinator ignores `ambient_stop_url` / `ambient_stop_timeout_seconds` (Home Assistant stops ambience before
-  opening a browser client), and `stop` now sends Escape instead of Alt+Left.
+  opening a browser client), and `stop` now sends Escape instead of Alt+Left. Add `"tab_navigation": true` to the
+  `sonarr` and `radarr` clients to keep their Tab-based left/right navigation.
+- Remove `127.0.0.1` from both `allowed_clients` lists.
 - Re-copy both `.service` files (new sandboxing; the ambience unit needs `ReadWritePaths=%t` for mpv's sockets).
