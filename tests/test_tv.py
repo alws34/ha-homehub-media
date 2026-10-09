@@ -1,15 +1,19 @@
 import asyncio
 import base64
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from pyytlounge import NowPlayingEvent, PlaybackStateEvent
+from pyytlounge.exceptions import NotConnectedException
 from samsungtvws import async_connection
 from samsungtvws import event as samsungtvws_event
 from samsungtvws.exceptions import UnauthorizedError
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State
+from yarl import URL
 
 from custom_components.homehub_media import tv as tvmod
 from custom_components.homehub_media.const import APP_CATALOG
@@ -19,9 +23,10 @@ DIAL = "http://192.0.2.1:8080/ws/apps/YouTube"
 VID = "B5unCXpegAw"
 
 
-def dial_xml(state):
+def dial_xml(state, extra=""):
     return (f'<?xml version="1.0" encoding="UTF-8"?><service xmlns="urn:dial-multiscreen-org:schemas:dial">'
-            f"<name>YouTube</name><options allowStop=\"true\"/><state>{state}</state></service>")
+            f"<name>YouTube</name><options allowStop=\"true\"/><state>{state}</state>"
+            f"<additionalData>{extra}</additionalData></service>")
 
 
 class FakeRemote:
@@ -288,57 +293,148 @@ async def test_touch_events_before_the_connect_reply_are_not_a_failure(hass, mon
         await tv.send_key("KEY_HOME")
 
 
-async def test_youtube_state(hass, aioclient_mock):
-    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
-    for reply, state in (({"text": dial_xml("running")}, "running"), ({"text": dial_xml("stopped")}, "stopped"),
-                         ({"text": dial_xml("hidden")}, "unknown"), ({"status": 404}, "unknown"),
-                         ({"exc": TimeoutError()}, "unknown")):
-        aioclient_mock.clear_requests()
-        aioclient_mock.get(DIAL, **reply)
-        assert await tv.youtube_state() == state
-    assert aioclient_mock.mock_calls[0][3]["Origin"] == "package:com.google.android.youtube"
+class FakeLounge:
+    """pyytlounge.YtLoungeApi stand-in. `on_play(lounge, video_id)` is what the TV does with a play_video."""
+    made = None  # this test's lounges, reset by the fixture
+    refresh_ok = True
+    on_play = None
+
+    def __init__(self, name, listener, logger=None):
+        self.listener, self.loaded, self.paired, self.played, self.autoplay = listener, None, None, [], None
+        self.screen, self.token, self.live, self.disconnected = None, None, False, False
+        self.auth = SimpleNamespace(serialize=lambda: {"version": 0, "screenId": self.screen,
+                                                       "loungeIdToken": self.token, "refreshToken": None, "expiry": None})
+        FakeLounge.made.append(self)
+    def load_auth_state(self, data):
+        self.loaded, self.screen = data, data["screenId"]  # KeyError on store_auth_state()'s keys, like the library
+    async def refresh_auth(self):
+        self.token = f"lt{len(FakeLounge.made)}"
+        return self.refresh_ok
+    async def pair_with_screen_id(self, screen_id):
+        self.paired = self.screen = screen_id
+        self.token = "fresh"
+        return True
+    async def connect(self):
+        self.live = True
+        return True
+    def connected(self): return self.live
+    async def subscribe(self): await asyncio.Event().wait()
+    async def set_auto_play_mode(self, enabled): self.autoplay = enabled; return True
+    async def play_video(self, video_id):
+        if not self.live:
+            raise NotConnectedException("Not connected")
+        self.played.append(video_id)
+        if FakeLounge.on_play:
+            await FakeLounge.on_play(self, video_id)
+        return True
+    async def disconnect(self): self.live, self.disconnected = False, True; return True
 
 
-async def youtube_run(hass, aioclient_mock, state, post_status=201):
-    """(http calls, ordered events) of play_youtube; events record the HTTP call count at each wait/key."""
+def now_playing(video_id):
+    return NowPlayingEvent({"videoId": video_id, "state": "3", "currentTime": "0", "duration": "300"})
+
+
+ENDED = PlaybackStateEvent({"currentTime": "300", "duration": "300", "state": "0"})  # YouTube's "ended"
+
+
+async def tv_plays(lounge, video_id):
+    await lounge.listener.now_playing_changed(now_playing(video_id))
+
+
+@pytest.fixture
+def lounge(monkeypatch, aioclient_mock):
+    """YouTube open on the TV (REST visible, DIAL with a screen id) and a lounge that plays what it is asked."""
+    FakeLounge.made, FakeLounge.refresh_ok, FakeLounge.on_play = [], True, tv_plays
+    monkeypatch.setattr(tvmod, "YtLoungeApi", FakeLounge)
+    aioclient_mock.get(BASE + "111299001912", json={"running": True, "visible": True})
+    aioclient_mock.get(DIAL, text=dial_xml("running", "<screenId>SCREEN</screenId>"))
+    aioclient_mock.delete(DIAL + "/run", status=200)
+    return FakeLounge
+
+
+async def test_play_youtube_pairs_through_the_screen_id_and_persists_the_auth(hass, aioclient_mock, lounge):
+    changes = []
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None, on_change=lambda: changes.append(1))
+    await tv.play_youtube(VID, "111299001912")
+    api, = lounge.made
+    assert api.paired == "SCREEN" and api.played == [VID] and api.autoplay is False
+    assert tv.lounge_auth == api.auth.serialize() == {"version": 0, "screenId": "SCREEN", "loungeIdToken": "fresh",
+                                                      "refreshToken": None, "expiry": None}  # never store_auth_state()
+    assert changes == [1]  # the Hub persists it
+    assert aioclient_mock.mock_calls[1][3]["Origin"] == "package:com.google.android.youtube"
+    await tv.play_youtube("fireFIREfir", "111299001912")  # warm: the same session, nothing launched
+    assert lounge.made == [api] and api.played == [VID, "fireFIREfir"]
+    assert [m.upper() for m, *_ in aioclient_mock.mock_calls] == ["GET", "GET", "GET"]  # visible, DIAL, visible
+    await tv.stop_youtube("111299001912")
+
+
+async def test_play_youtube_saved_auth_then_pairs_again_once(hass, aioclient_mock, lounge):
+    saved = {"version": 0, "screenId": "OLD", "loungeIdToken": "x", "refreshToken": None, "expiry": None}
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None, lounge_auth=saved)
+    await tv.play_youtube(VID, "111299001912")
+    api, = lounge.made
+    assert api.loaded == saved and api.paired is None and tv.lounge_auth["loungeIdToken"] == "lt1"  # refreshed
+    await tv.stop_youtube("111299001912")
+    lounge.refresh_ok = False  # YouTube forgot this remote
+    await tv.play_youtube(VID, "111299001912")
+    assert lounge.made[-1].paired == "SCREEN" and tv.lounge_auth["screenId"] == "SCREEN"
+    await tv.stop_youtube("111299001912")
+
+
+async def test_youtube_loops_on_ended_until_stopped(hass, aioclient_mock, lounge):
     tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
-    events = []
-    async def send_key(key):
-        events.append(("key", key, aioclient_mock.call_count))
-    tv.send_key = send_key
-    aioclient_mock.get(DIAL, text=dial_xml(state))
-    aioclient_mock.post(DIAL, status=post_status)
-    real = asyncio.sleep
+    await tv.play_youtube(VID, "111299001912")
+    api = lounge.made[0]
+    await api.listener.playback_state_changed(PlaybackStateEvent({"currentTime": "120", "duration": "300", "state": "1"}))
+    await api.listener.playback_state_changed(ENDED)
+    assert api.played == [VID, VID]  # played again from 0:00, not seek_to(0)
+    await api.listener.now_playing_changed(now_playing("otherVIDEO1"))  # the user picked another video on the TV
+    await api.listener.playback_state_changed(ENDED)
+    assert api.played == [VID, VID]
+    await tv.stop_youtube("111299001912")
+    assert api.disconnected and aioclient_mock.mock_calls[-1][:2] == ("DELETE", URL(DIAL + "/run"))
+    await api.listener.now_playing_changed(now_playing(VID))
+    await api.listener.playback_state_changed(ENDED)
+    assert api.played == [VID, VID]  # no loop after the stop
+
+
+async def test_play_youtube_cold_start_retries_after_the_session_drops(hass, aioclient_mock, lounge, monkeypatch):
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(BASE + "111299001912", json={"running": False, "visible": False})
+    aioclient_mock.post(BASE + "111299001912", json=True)
+    aioclient_mock.get(DIAL, text=dial_xml("running", "<screenId>SCREEN</screenId>"))
+    aioclient_mock.delete(DIAL + "/run", status=200)
+    async def app_starting(api, video_id):  # accepted, then the app start drops the session: no NowPlaying
+        api.live = False
+        lounge.on_play = tv_plays
+    lounge.on_play = app_starting
+    monkeypatch.setattr(tvmod, "YT_ACK_SECS", 0.01)
+    sleeps, real = [], asyncio.sleep
     async def sleep(delay):
-        events.append(("wait", delay, aioclient_mock.call_count)); await real(0)
-    with patch.object(asyncio, "sleep", sleep):
-        await tv.play_youtube(VID)
-    return aioclient_mock.mock_calls, events
-
-
-async def test_play_youtube_cold_passes_the_profile_picker(hass, aioclient_mock):
-    calls, events = await youtube_run(hass, aioclient_mock, "stopped")
-    assert [(m.upper(), str(u)) for m, u, *_ in calls] == [("GET", DIAL), ("POST", DIAL), ("POST", DIAL)]
-    assert events == [("wait", 8, 2), ("key", "KEY_ENTER", 2), ("wait", 3, 3), ("key", "KEY_ENTER", 3)]
-    _, _, body, headers = calls[1]
-    assert body == f"v={VID}&t=0"
-    assert headers["Origin"] == "package:com.google.android.youtube"
-    assert headers["Content-Type"] == "text/plain; charset=utf-8"
-
-
-async def test_play_youtube_warm_and_errors(hass, aioclient_mock):
-    calls, events = await youtube_run(hass, aioclient_mock, "running", post_status=200)
-    assert [m.upper() for m, *_ in calls] == ["GET", "POST"]
-    assert events == [("wait", 3, 2), ("key", "KEY_ENTER", 2)]
-    aioclient_mock.clear_requests()
-    with pytest.raises(HomeAssistantError, match="HTTP 403"):  # e.g. a missing Origin header
-        await youtube_run(hass, aioclient_mock, "running", post_status=403)
+        sleeps.append(delay); await real(0)
     tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
-    aioclient_mock.clear_requests()
+    with patch.object(asyncio, "sleep", sleep):
+        await tv.play_youtube(VID, "111299001912")
+    first, second = lounge.made
+    assert first.played == second.played == [VID] and sleeps == [1]
+    assert second.loaded == first.auth.serialize() and second.paired is None  # reconnected with the saved auth
+    assert ("POST", URL(BASE + "111299001912")) in [c[:2] for c in aioclient_mock.mock_calls]  # REST launch
+    await tv.stop_youtube("111299001912")
+
+
+async def test_play_youtube_gives_up_and_validates(hass, aioclient_mock, lounge, monkeypatch):
+    lounge.on_play = None  # accepted, never reported
+    monkeypatch.setattr(tvmod, "YT_ACK_SECS", 0.01)
+    monkeypatch.setattr(tvmod, "YT_START_SECS", 0)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    with pytest.raises(HomeAssistantError, match="did not start"):
+        await tv.play_youtube(VID, "111299001912")
+    aioclient_mock.mock_calls.clear()
     for bad in ("short", "B5unCXpegAw&x", "../../etc/pa", "B5unCXpegAw\n"):
         with pytest.raises(ServiceValidationError):
-            await tv.play_youtube(bad)
+            await tv.play_youtube(bad, "111299001912")
     assert aioclient_mock.call_count == 0
+    await tv.stop_youtube("111299001912")
 
 
 async def test_stop_youtube_dial_then_rest(hass, aioclient_mock):

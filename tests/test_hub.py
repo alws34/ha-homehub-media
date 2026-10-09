@@ -267,7 +267,10 @@ async def test_token_rotation_persists_without_reload(hass, setup_entry):
     hub.tv.token = "rotated"
     hub_mod.SamsungTV.call_args.kwargs["on_change"]()
     await hass.async_block_till_done()
-    assert setup_entry.data["token"] == "rotated"
+    assert setup_entry.data["token"] == "rotated" and "youtube_lounge" not in setup_entry.data
+    hub.tv.lounge_auth = auth = {"version": 0, "screenId": "s", "loungeIdToken": "l", "refreshToken": None, "expiry": None}
+    hub_mod.SamsungTV.call_args.kwargs["on_change"]()  # YouTube paired
+    assert setup_entry.data == {"host": "192.0.2.1", "token": "rotated", "mac": None, "youtube_lounge": auth}
     assert setup_entry.state is ConfigEntryState.LOADED and setup_entry.runtime_data is hub
 
 

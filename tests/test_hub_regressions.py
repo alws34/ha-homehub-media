@@ -32,7 +32,7 @@ def _entry(hass, tmp_path):
 
 def _tv(tv_cls):
     tv = tv_cls.return_value
-    tv.token, tv.available, tv.keyboard_active, tv.pointer_active = "t", True, False, False
+    tv.token, tv.available, tv.keyboard_active, tv.pointer_active, tv.lounge_auth = "t", True, False, False, None
     tv.discover_apps.return_value = {"youtube": "111299001912"}
     return tv
 

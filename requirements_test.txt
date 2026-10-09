@@ -5,3 +5,4 @@ home-assistant-frontend==20260826.7
 hassil==3.12.1
 home-assistant-intents==2026.8.28
 gazetteer-matcher==1.1.0
+pyytlounge==3.4.0

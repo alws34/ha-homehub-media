@@ -117,7 +117,7 @@ const VISUALS = [
   ["hogwarts", "Hogwarts Library", ["#120b1f", "#2b1a3c"], [[150, 260, 90, "#f2b45b"], [480, 120, 70, "#7a4bc2"]], false],
   ["abstract", "Abstract Flow", ["#1b0533", "#0b2a4a"], [[200, 140, 120, "#e040fb"], [450, 220, 130, "#00e5ff"]], false],
   ["rain", "Rain on Glass", ["#26323d", "#3e4f5c"], [[320, 120, 150, "#7f9bb0"], [120, 300, 80, "#a7c1d4"]], true],
-  ["dog_tv", "DOG TV", ["#6ec6ff", "#7cc96b"], [[500, 80, 70, "#fff59d"], [200, 320, 140, "#3d9a3d"]], false],
+  ["cat_tv", "Cat TV", ["#6ec6ff", "#7cc96b"], [[500, 80, 70, "#fff59d"], [200, 320, 140, "#3d9a3d"]], false],
   ["northern_lights", "Northern Lights", ["#03101f", "#0a2238"], [[200, 100, 120, "#29f19c"], [430, 140, 100, "#5f6cf7"]], false],
 ];
 const SOUNDTRACKS = [
@@ -129,7 +129,7 @@ const SOUNDTRACKS = [
 ];
 const catalog = {
   visuals: VISUALS.map(([id, title, bg, glows, favorite]) => ({
-    id, kind: "visual", title, source_type: "file", live: id === "dog_tv", duration: id === "dog_tv" ? null : 1800 + title.length * 60,
+    id, kind: "visual", title, source_type: "file", live: id === "cat_tv", duration: id === "cat_tv" ? null : 1800 + title.length * 60,
     favorite, preview: scene(bg, glows),
   })),
   soundtracks: SOUNDTRACKS.map(([id, title, live, duration], i) => ({
@@ -158,7 +158,8 @@ for (const [srv, rows] of Object.entries(library)) for (const r of Object.values
 const MODES = [
   ["fireplace", "Fireplace", "mdi:fireplace", false], ["dinner", "Dinner", "mdi:silverware-fork-knife", false],
   ["reading", "Reading", "mdi:book-open-variant", false], ["game_night", "Game Night", "mdi:dice-multiple", false],
-  ["chill", "Chill", "mdi:sofa", false], ["movie_time", "Movie Time", "mdi:movie-open", true], ["dog_tv", "DOG TV", "mdi:dog", false],
+  ["chill", "Chill", "mdi:sofa", false], ["starry_night", "Starry Night", "mdi:weather-night", false],
+  ["movie_time", "Movie Time", "mdi:movie-open", true], ["cat_tv", "Cat TV", "mdi:cat", false],
 ];
 const comp = (visual, soundtrack, mix) => ({
   visual, visual_enabled: !!visual, video_loop: true, video_random_start: true, original_volume: 100 - mix,

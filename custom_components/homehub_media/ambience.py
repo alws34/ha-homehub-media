@@ -246,7 +246,7 @@ class AmbienceManager:
             need_activity = not mode["lights_only"] and (
                 player == "pc" or self._hub.activity.current != "tv" or not self._hub.tv.available)
             # the same player stays up: swap media in place. The TV page changes URLs without a reload (while
-            # it still polls); YouTube takes the next video warm, without its profile picker.
+            # it still polls); YouTube switches to the next video over its lounge session, without closing.
             page_up = self._backend == "tv" and time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS
             swap = (self.uses_media and not mode["lights_only"] and not need_activity
                     and (self._yt is not None if yt else self._yt is None and page_up))
@@ -306,7 +306,7 @@ class AmbienceManager:
             if comp["soundtrack"]:
                 _LOGGER.debug("YouTube visual plays its own sound; soundtrack %s is not used", comp["soundtrack"])
             self._yt = yt  # first: a failed start still stops what began
-            await self._hub.tv.play_youtube(yt)
+            await self._hub.tv.play_youtube(yt, self._youtube_app)
         elif self._backend == "pc":
             await self._hub.pc_ambient.play({k: v for k, v in comp.items() if k != "visuals"})
         else:
@@ -388,7 +388,7 @@ class AmbienceManager:
                 restart = self.mode
             else:
                 if yt and yt != self._yt:
-                    await self._hub.tv.play_youtube(yt)  # warm: YouTube is up already
+                    await self._hub.tv.play_youtube(yt, self._youtube_app)  # warm: YouTube is up already
                     self._yt = yt
                 elif not yt and self._backend == "pc" and (body := _pc_patch(comp, set(part))):
                     await self._hub.pc_ambient.patch(body)
@@ -428,7 +428,8 @@ class AmbienceManager:
             except HomeAssistantError as err:  # one failed poll is no proof that the TV is off
                 _LOGGER.debug("YouTube status failed: %s", err)
                 return
-            gone = not (info or {}).get("visible")
+            if not (gone := not (info or {}).get("visible")):
+                await self._hub.tv.youtube_keepalive()  # a dropped lounge session would stop the loop
         elif self._backend == "pc":
             try:
                 gone = (await self._hub.pc_ambient.status()).get("state") == "idle"

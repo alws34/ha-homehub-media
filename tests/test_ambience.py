@@ -371,9 +371,9 @@ async def test_youtube_start_plays_in_the_tv_app_and_stop_restores_lights(hass):
     am = await yt_manager(hass, scene="scene.chill")
     order = []
     am._hub.activity.set.side_effect = lambda a: order.append(("set", a, am.mode)) or True
-    am._hub.tv.play_youtube.side_effect = lambda v: order.append(("play", v, am.mode))
+    am._hub.tv.play_youtube.side_effect = lambda v, app: order.append(("play", v, app, am.mode))
     await am.start("chill", {"visual": "star_night", "soundtrack": "rain"})  # the soundtrack is not used
-    assert order == [("set", "tv", "off"), ("play", "B5unCXpegAw", "chill")]  # the TV first, then the mode
+    assert order == [("set", "tv", "off"), ("play", "B5unCXpegAw", "111299001912", "chill")]  # the TV first, then the mode
     assert [c.data["entity_id"] for c in on] == ["scene.chill"] and am.page_state(am._sid) is None
     am._hub.tv.open_url.assert_not_awaited()
     await am.stop()
@@ -416,10 +416,10 @@ async def test_youtube_health_stops_when_youtube_leaves_the_screen(hass):
     am._started = time.monotonic() - 100
     tv.app_info.return_value = {"running": True, "visible": True}  # YouTube on screen
     await tick(hass, 62)
-    assert am.mode == "chill"
+    assert am.mode == "chill" and tv.youtube_keepalive.await_count == 1  # reconnects a dropped lounge session
     tv.app_info.side_effect = HomeAssistantError("timeout")  # one failed poll while the TV is available
     await tick(hass, 93)
-    assert am.mode == "chill" and on[-1].data["entity_id"] == "scene.chill"
+    assert am.mode == "chill" and on[-1].data["entity_id"] == "scene.chill" and tv.youtube_keepalive.await_count == 1
     tv.app_info.side_effect = None
     tv.app_info.return_value = {"running": True, "visible": False}  # HOME: YouTube keeps running, hidden
     await tick(hass, 124)
@@ -459,6 +459,28 @@ async def test_youtube_mode_switch_is_warm_and_file_switch_starts_over(hass):
     await am.stop()
 
 
+async def test_youtube_switch_to_another_youtube_mode_keeps_youtube_open(hass):
+    async_mock_service(hass, "scene", "create"); on = async_mock_service(hass, "scene", "turn_on")
+    hass.states.async_set("scene.chill", "x", {"entity_id": ["light.a"]})
+    opts = chill(scene="scene.chill")
+    opts["modes"].append({"id": "starry_night", "name": "Starry Night", "icon": "mdi:weather-night",
+                          "scene": "scene.night", "flicker": [], "lights_only": False})
+    am = await manager(hass, opts)
+    am._catalog["visuals"] += [dict(YT), dict(FIRE)]
+    tv = am._hub.tv
+    am._hub.activity.current = "tv"; tv.available = True
+    await am.start("chill", {"visual": "star_night"})
+    await am.start("starry_night", {"visual": "fire"})
+    tv.stop_youtube.assert_not_awaited()  # the lounge switches the video in place
+    assert [c.args for c in tv.play_youtube.await_args_list] == [("B5unCXpegAw", "111299001912"),
+                                                                  ("fireFIREfir", "111299001912")]
+    assert [c.data["entity_id"] for c in on] == ["scene.chill", "scene.night"]  # the new mode's lights apply
+    assert am.mode == "starry_night" and am._yt == "fireFIREfir"
+    await am.start("chill", {"visual": "rain"})  # a file: YouTube closes
+    tv.stop_youtube.assert_awaited_once()
+    await am.stop()
+
+
 async def test_visuals_pool_picks_a_random_visual_each_start(hass, monkeypatch):
     am = await yt_manager(hass, "pc")
     am._hub.pc_ambient = pc = AsyncMock()
@@ -469,7 +491,7 @@ async def test_visuals_pool_picks_a_random_visual_each_start(hass, monkeypatch):
     await am.start("chill")
     assert pools == [["rain", "star_night"]]  # ids no longer in the catalog are skipped
     am._hub.activity.set.assert_awaited_with("tv")  # star_night is a YouTube video
-    am._hub.tv.play_youtube.assert_awaited_once_with("B5unCXpegAw")
+    am._hub.tv.play_youtube.assert_awaited_once_with("B5unCXpegAw", "111299001912")
     assert am.snapshot()["compositions"]["chill"]["visuals"] == ["rain", "ghost", "star_night"]
     monkeypatch.setattr("custom_components.homehub_media.ambience.random.choice", lambda pool: pool[0])
     await am.start("chill")  # this time a file on the PC
