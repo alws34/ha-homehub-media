@@ -15,6 +15,7 @@ VOL = {"normal": 19, "quiet": 10, "block_entity": None}
 def fast(monkeypatch):
     monkeypatch.setattr(activity, "VERIFY_SECS", 0.01)
     monkeypatch.setattr(activity, "POWER_WAIT_SECS", 0.01)
+    monkeypatch.setattr(activity, "SETTLE_SECS", 0.01)
 
 
 def make_hub(options):
@@ -51,7 +52,28 @@ async def test_box_source_retry(hass):
                     "box": {"remote": "remote.box", "media_player": None, "input": {"method": "source", "value": "HDMI1"}}})
     am = ActivityManager(hass, hub)
     await am.set("box")
-    assert len(sel) >= 2 and am.phase == "needs_reset"   # source never confirmed
+    assert len(sel) == 2 and am.phase == "needs_reset"   # warm: 2 attempts, source never confirmed
+
+
+def box_setup(hass, tv_state, source):
+    sel = async_mock_service(hass, "media_player", "select_source")
+    async_mock_service(hass, "remote", "turn_on")
+    hass.states.async_set("media_player.tv", tv_state, {"source": source})
+    hub = make_hub({"volume": VOL, "tv": {"entity": "media_player.tv"},
+                    "box": {"remote": "remote.box", "media_player": None, "input": {"method": "source", "value": "HDMI1"}}})
+    return sel, ActivityManager(hass, hub)
+
+
+async def test_box_cold_entity_wins_over_stale_available(hass):
+    sel, am = box_setup(hass, "off", None)  # hub.tv.available is a stale True; the entity says off -> cold
+    await am.set("box")
+    assert len(sel) == 3 and am.phase == "needs_reset"
+
+
+async def test_box_force_repeats_even_when_confirmed(hass):
+    sel, am = box_setup(hass, "on", "HDMI1")
+    await am.set("box", force=True)
+    assert len(sel) == 2 and am.phase == "ready"
 
 
 async def test_tv_sends_home_and_normal_volume(hass):
@@ -84,7 +106,7 @@ async def test_newer_request_cancels_running_one(hass):
     first = asyncio.create_task(am.set("box"))
     while not stops:
         await asyncio.sleep(0)
-    await am.set("tv")
+    await asyncio.wait_for(am.set("tv"), 1)
     await first  # superseded request returns quietly
     assert (am.current, am.phase) == ("tv", "ready") and remote_on == []
 
@@ -110,6 +132,30 @@ async def test_pc_key_input(hass):
 
 
 async def test_unconfigured_target_rejected(hass):
-    am = ActivityManager(hass, make_hub({"volume": VOL, "tv": {}, "box": None}))
+    am = ActivityManager(hass, make_hub({"volume": VOL, "tv": {}, "box": None,
+                                         "pc": {"input": {"method": "source", "value": "HDMI3"}}}))
     with pytest.raises(ServiceValidationError):
         await am.set("box")
+    with pytest.raises(ServiceValidationError):  # source switching needs a TV entity
+        await am.set("pc")
+
+
+async def test_unexpected_error_leaves_needs_reset(hass):
+    hub = make_hub({"volume": VOL, "tv": {}})
+    hub.tv.send_key.side_effect = RuntimeError("boom")
+    am = ActivityManager(hass, hub)
+    with pytest.raises(RuntimeError):
+        await am.set("tv")
+    assert am.phase == "needs_reset"
+
+
+async def test_shutdown_cancels_running_request(hass):
+    hub = make_hub({"volume": VOL, "tv": {}})
+    hub.ambience.stop.side_effect = asyncio.Event().wait
+    am = ActivityManager(hass, hub)
+    pending = asyncio.create_task(am.set("tv"))
+    while not hub.ambience.stop.await_count:
+        await asyncio.sleep(0)
+    await am.async_shutdown()
+    await asyncio.wait_for(pending, 1)  # superseded caller returns quietly
+    assert am.current == "off" and not hub.tv.send_key.await_count
