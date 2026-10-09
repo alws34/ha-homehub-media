@@ -407,6 +407,39 @@ class AmbienceManager:
             raise ServiceValidationError(str(err)) from err
         self._hub.async_notify()
 
+    def _used(self, mode_id: str) -> set[str]:
+        comp = self.composition(mode_id)
+        return {comp["visual"], *comp["visuals"]}
+
+    async def set_mode_videos(self, mode_id: str, videos: list[dict]) -> None:
+        """The mode's visuals become exactly these YouTube videos (added to or changed in the options' list by
+        name); the videos only this mode used are dropped from the list."""
+        self._mode(mode_id)
+        new = {v["name"].strip(): v["url"].strip() for v in videos}
+        if len(new) < len(videos):
+            raise ServiceValidationError("Each video needs its own name")
+        amb = self._hub.options.get(OPT_AMBIENCE) or {}
+        merged = {**(amb.get("youtube") or {}), **new}  # changed names keep their place, new ones go last
+        files = {v["id"] for v in self._catalog["visuals"] if v["source_type"] != "youtube"}
+        try:
+            drop = self._used(mode_id) - {i for m in self.modes() if m["id"] != mode_id for i in self._used(m["id"])}
+            keep = {name: url for (name, url), item in zip(merged.items(), cat.youtube_items(merged, files))
+                    if name in new or item["id"] not in drop}
+            # ponytail: a drop can shift a later same-slug video's id (rain_2 -> rain); persist ids if that bites
+            ids = dict(zip(keep, (i["id"] for i in cat.youtube_items(keep, files))))
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        self._hub.options[OPT_AMBIENCE] = amb = {**amb, "youtube": keep}
+        entry = self._hub.entry  # no update listener, so this does not reload the entry (see rescan_apps)
+        self.hass.config_entries.async_update_entry(entry, options={**entry.options, OPT_AMBIENCE: amb})
+        visuals = [ids[name] for name in new]
+        await self.save_mode(mode_id, {**self.composition(mode_id), "visual": next(iter(visuals), None),
+                                       "visuals": visuals, "visual_enabled": bool(visuals)})
+        try:
+            await self.refresh_catalog()
+        except HomeAssistantError as err:  # the videos are saved; only the file scan failed
+            _LOGGER.warning("Ambience catalog unavailable: %s", err)
+
     async def set_favorite(self, kind: str, media_id: str, favorite: bool) -> None:
         try:
             await self._store.async_set_favorite(kind, media_id, favorite)

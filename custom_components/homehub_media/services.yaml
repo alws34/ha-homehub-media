@@ -165,6 +165,18 @@ save_mode:
       selector:
         text:
     <<: *composition
+set_mode_videos:
+  fields:
+    mode:
+      required: true
+      example: fireplace
+      selector:
+        text:
+    videos:
+      required: true
+      example: '[{"name": "Fireplace", "url": "https://youtu.be/B5unCXpegAw"}]'
+      selector:
+        object:
 set_favorite:
   fields:
     kind:

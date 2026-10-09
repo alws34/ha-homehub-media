@@ -710,6 +710,20 @@
         }
       }
     },
+    "set_mode_videos": {
+      "name": "Set mode videos",
+      "description": "Sets an ambience mode's YouTube videos: they become its visuals, the first one shown by default. Adds or changes them in the YouTube video list by name, and removes from that list the videos that only this mode used. Administrators only.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "ID of the ambience mode."
+        },
+        "videos": {
+          "name": "Videos",
+          "description": "List of videos, each with a name and a url (a YouTube link or 11-character video ID). An empty list leaves the mode without visuals."
+        }
+      }
+    },
     "set_favorite": {
       "name": "Set favorite",
       "description": "Marks a visual or soundtrack as a favorite.",

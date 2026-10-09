@@ -124,6 +124,7 @@ def youtube_items(entries: dict[str, str], taken: frozenset[str] | set[str] = fr
         items.append({
             "id": media_id, "kind": "visual", "title": name.strip(), "source_type": "youtube", "live": False,
             "duration": None, "youtube_id": vid, "preview": f"/api/homehub_media/art/youtube/{vid}",
+            "link": url.strip(),  # the card's mode editor shows and edits it
         })
     return items
 

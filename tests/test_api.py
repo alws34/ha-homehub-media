@@ -207,3 +207,47 @@ async def test_rescan_apps_is_admin_only(hass, setup_entry, hass_read_only_user)
     with pytest.raises(Unauthorized):
         await hass.services.async_call(DOMAIN, "rescan_apps", {}, blocking=True, context=ctx)
     await hass.services.async_call(DOMAIN, "refresh_catalog", {}, blocking=True, context=ctx)  # any user
+
+
+async def test_set_mode_videos(hass, setup_entry, hass_read_only_user):
+    hub = setup_entry.runtime_data
+    amb, call = hub.ambience, hass.services.async_call
+    hub.options["ambience"] = {**hub.options["ambience"], "youtube": {
+        "Fire": "fireFIREfir", "Old": "https://youtu.be/B5unCXpegAw", "Spare": "spareSPAREs"}}
+    hass.config_entries.async_update_entry(setup_entry, options={"ambience": hub.options["ambience"]})
+    await amb.refresh_catalog()
+    await amb.save_mode("dinner", {"visual": "fire"})
+    await amb.save_mode("chill", {"visuals": ["old", "fire"], "soundtrack_volume": 40})
+    videos = [{"name": " New ", "url": "https://www.youtube.com/watch?v=newNEWnewNE"},
+              {"name": "Fire", "url": "https://youtu.be/fire2FIRE2f"}]
+    with pytest.raises(Unauthorized):  # writes the config entry
+        await call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": videos}, blocking=True,
+                   context=Context(user_id=hass_read_only_user.id))
+    for bad, error in (([{"name": "Bad", "url": "https://example.com/x"}], "not a YouTube video link"),
+                       ([videos[1], {**videos[1], "name": "Fire "}], "its own name"),
+                       ([{"name": " ", "url": "fireFIREfir"}], "needs a name")):
+        with pytest.raises(ServiceValidationError, match=error):
+            await call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": bad}, blocking=True)
+    for bad in ([{"name": "a=b", "url": "fireFIREfir"}], [{"name": "a"}]):
+        with pytest.raises(vol.Invalid):
+            await call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": bad}, blocking=True)
+    with pytest.raises(ServiceValidationError, match="Unknown ambience mode"):
+        await call(DOMAIN, "set_mode_videos", {"mode": "nope", "videos": []}, blocking=True)
+    assert "Old" in setup_entry.options["ambience"]["youtube"]  # nothing written so far
+
+    await call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": videos}, blocking=True)
+    # Old was only chill's: dropped; Fire is dinner's too: changed in place; Spare was never used: kept
+    assert setup_entry.options["ambience"]["youtube"] == hub.options["ambience"]["youtube"] == {
+        "Fire": "https://youtu.be/fire2FIRE2f", "Spare": "spareSPAREs", "New": "https://www.youtube.com/watch?v=newNEWnewNE"}
+    comp = amb.composition("chill")
+    assert (comp["visual"], comp["visuals"], comp["visual_enabled"], comp["soundtrack_volume"]) == (
+        "new", ["new", "fire"], True, 40)
+    yt = [(v["id"], v["link"]) for v in amb.catalog()["visuals"] if v["source_type"] == "youtube"]
+    assert yt == [("fire", "https://youtu.be/fire2FIRE2f"), ("spare", "spareSPAREs"),
+                  ("new", "https://www.youtube.com/watch?v=newNEWnewNE")]
+    assert setup_entry.runtime_data is hub  # the options write did not reload the entry
+
+    await call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": []}, blocking=True)
+    comp = amb.composition("chill")
+    assert (comp["visual"], comp["visuals"], comp["visual_enabled"]) == (None, [], False)
+    assert list(setup_entry.options["ambience"]["youtube"]) == ["Fire", "Spare"]
