@@ -109,6 +109,18 @@ Errors: 403 IP not allowed, 421 Host not allowed, 401 bad or missing token, 411 
 Details are only in `journalctl --user -u ambient-player -u homehub-media-hub-coordinator`. Hosts outside
 `allowed_clients` share 2 connections (enough for their 403); allowlisted hosts get 16 of their own.
 
+## Firewall
+
+Recommended: let only Home Assistant reach the two ports. The per-IP connection pools stop slow-request floods from
+other LAN hosts, but not a SYN/accept-backlog flood, which only a firewall can drop.
+
+```bash
+sudo ufw default deny incoming
+sudo ufw allow OpenSSH        # only if you manage this PC over SSH; do this before enabling
+sudo ufw allow from YOUR_HOME_ASSISTANT_IP to any port 8097,8098 proto tcp
+sudo ufw enable
+```
+
 ## Upgrading from the YAML bundle
 
 - `auth_token` is now required in both configs.
