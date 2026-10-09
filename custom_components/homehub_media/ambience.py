@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import time
 from datetime import datetime, timedelta
 from functools import partial
@@ -40,6 +41,7 @@ FLICKER = [(24, 3.2), (12, 3.8), (28, 2.9), (16, 4.1), (22, 3.5), (9, 4.2), (30,
            (8, 4.3), (27, 3.0), (17, 3.7), (23, 3.4), (10, 4.0), (25, 3.2), (13, 3.8), (11, 2.6)]
 SNAPSHOT_ID = "homehub_media_snapshot"
 STATE_PATH = "/api/homehub_media/page/state"
+STATE_URL_HOURS = 2  # the page's state URL signature; media URLs keep the default 24 h
 HEALTH_SECS, PAGE_GRACE_SECS, PAGE_TIMEOUT_SECS, FADE_SECS, ENTER_DELAY_SECS = 30, 60, 45, 60, 4
 IDLE_APP_STATES = {"", "unknown", "home", "Home", "TV", "off"}
 _DIRS = {"visual": VIDEO_DIR, "soundtrack": SOUNDTRACK_DIR}
@@ -86,6 +88,7 @@ class AmbienceManager:
         self.uses_media = False
         self.page_version = int(time.time() * 1000)  # clock-seeded: a restart never repeats a version
         self.page_last_seen = 0.0
+        self._sid: str | None = None  # TV page session: only its state URL is answered
         self._catalog: dict[str, list[dict]] = {"visuals": [], "soundtracks": []}
         self._comp: dict | None = None
         self._snapshot = False  # scene.homehub_media_snapshot holds the pre-ambience lights
@@ -105,7 +108,7 @@ class AmbienceManager:
         return "pc" if want == "pc" and self._hub.pc_ambient else "tv"
 
     def modes(self) -> list[dict]:
-        return self._hub.options.get(OPT_MODES) or DEFAULT_MODES
+        return self._hub.options.get(OPT_MODES, DEFAULT_MODES)
 
     def _mode(self, mode_id: str) -> dict:
         if mode := next((m for m in self.modes() if m["id"] == mode_id), None):
@@ -207,8 +210,10 @@ class AmbienceManager:
                 # ponytail: lights only the new mode touches are not in the kept snapshot, so stay as set
                 await self._stop(restore_lights=not lighting, keep_page=swap)
             try:
-                if need_activity:  # before self.mode is set: activity.set() stops a running media ambience
-                    await self._hub.activity.set(self._backend)
+                # before self.mode is set: activity.set() stops a running media ambience
+                if need_activity and not await self._hub.activity.set(self._backend):
+                    await self._stop()  # superseded by a newer activity request: start nothing
+                    return
                 if lighting:
                     await self._lights(mode)
                 self.mode, self.uses_media, self._comp, self.error = mode_id, not mode["lights_only"], comp, None
@@ -268,9 +273,13 @@ class AmbienceManager:
             self.hass, partial(self._health, self._gen), timedelta(seconds=HEALTH_SECS)))
 
     def _page_url(self) -> str:
+        self._sid = secrets.token_urlsafe(16)  # a fresh page: every earlier state URL stops working
         base = (self._hub.options.get(OPT_TV) or {}).get("base_url") or get_url(
             self.hass, allow_external=False, allow_cloud=False, prefer_external=False)
-        return f"{base.rstrip('/')}{STATIC_URL}/{PAGE_FILE}?s={quote(self._hub.sign_path(STATE_PATH), safe='')}"
+        return f"{base.rstrip('/')}{STATIC_URL}/{PAGE_FILE}?s={quote(self._state_url(), safe='')}"
+
+    def _state_url(self) -> str:
+        return self._hub.sign_path(f"{STATE_PATH}?sid={self._sid}", hours=STATE_URL_HOURS)
 
     async def _press_enter(self, _now: datetime) -> None:  # user gesture so the page may autoplay with sound
         try:
@@ -412,7 +421,7 @@ class AmbienceManager:
                 or not self.daypart_mode()):  # _unsub_idle None: unloading
             return
         app = tv.get("app_entity") and self.hass.states.get(tv["app_entity"])
-        if ((self.hass.states.is_state(tv["entity"], "on") if tv.get("entity") else hub.tv.available)
+        if (hub.activity.is_on()
                 and not (hub.library and hub.library.now_playing)
                 and time.monotonic() - hub.last_command >= self._dayparts().get("idle_minutes", 10) * 60
                 and (not app or app.state in IDLE_APP_STATES)):
@@ -432,8 +441,12 @@ class AmbienceManager:
             return {"url": url, "loop": loop, "random_start": random_start, "volume": volume / 100}
         return None
 
-    def page_state(self) -> dict:
-        """K7 payload for the TV page; every call is a heartbeat."""
+    def page_state(self, sid: str | None) -> dict | None:
+        """K7 payload for the current TV page session (None for any other sid); every answer is a heartbeat."""
+        if not self._sid or sid != self._sid:
+            return None
+        if not self.uses_media:
+            self._sid = None  # the page gets this stop once; the session then ends
         self.page_last_seen = time.monotonic()
         comp = self._comp if self.uses_media else None
         return {
@@ -444,7 +457,7 @@ class AmbienceManager:
             "soundtrack": comp and self._layer(
                 "soundtrack", comp["soundtrack"], comp["soundtrack_loop"], comp["soundtrack_random_start"],
                 comp["soundtrack_volume"]),
-            "next": self._hub.sign_path(STATE_PATH),
+            "next": self._state_url() if self.uses_media else None,
         }
 
     def snapshot(self) -> dict:

@@ -11,6 +11,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.homehub_media import assistant as a
 from custom_components.homehub_media.const import DOMAIN
+from custom_components.homehub_media.hub import Hub
 
 
 async def test_claude_tool_call_parsed(hass, monkeypatch):
@@ -25,7 +26,7 @@ async def test_claude_tool_call_parsed(hass, monkeypatch):
                 assert kw["output_config"] == {"effort": "low"} and kw["extra_body"] == {"fallbacks": "default"}
                 assert kw["extra_headers"] == {"anthropic-beta": "server-side-fallback-2026-07-01"}
                 return msg
-    monkeypatch.setattr(a, "_anthropic_client", lambda cfg: C)
+    monkeypatch.setattr(a, "_sdk_client", lambda cfg: C)
     r = await a.complete(hass, {"provider": "claude", "api_key": "k", "model": "claude-opus-5-5"}, "sys",
                          [{"role": "user", "content": "dinner mode"}], [{"name": "AmbienceStart",
                          "description": "d", "parameters": {"type": "object", "properties": {}}}])
@@ -38,7 +39,7 @@ async def test_claude_refusal(hass, monkeypatch):
             @staticmethod
             async def create(**kw):
                 return SimpleNamespace(stop_reason="refusal", content=[])
-    monkeypatch.setattr(a, "_anthropic_client", lambda cfg: C)
+    monkeypatch.setattr(a, "_sdk_client", lambda cfg: C)
     r = await a.complete(hass, {"provider": "claude", "api_key": "k", "model": "m"}, "s",
                          [{"role": "user", "content": "x"}], [])
     assert r.tool_calls == [] and "can't" in r.text
@@ -54,7 +55,7 @@ async def test_openai_compatible_for_ollama(hass, monkeypatch):
                 @staticmethod
                 async def create(**kw):
                     seen.update(kw); return SimpleNamespace(choices=[choice])
-    monkeypatch.setattr(a, "_openai_client", lambda cfg: (seen.setdefault("cfg", cfg), O)[1])
+    monkeypatch.setattr(a, "_sdk_client", lambda cfg: (seen.setdefault("cfg", cfg), O)[1])
     r = await a.complete(hass, {"provider": "ollama", "url": "http://o:11434", "model": "llama3.2"}, "s",
                          [{"role": "user", "content": "go home"}], [])
     assert r.tool_calls == [("c1", "Remote", {"command": "home"})] and seen["model"] == "llama3.2"
@@ -62,6 +63,7 @@ async def test_openai_compatible_for_ollama(hass, monkeypatch):
 
 async def test_tool_validates_and_calls_hub(hass):
     hub = SimpleNamespace(last_command=0, ambience=SimpleNamespace(start=AsyncMock(return_value=None), modes=lambda: [{"id": "dinner", "name": "Dinner"}]))
+    hub.command = lambda aw: Hub.command(hub, aw)
     api = a.HomeHubLLMAPI(hass)
     assert (api.id, api.name) == (a.API_ID, "HomeHub Media")
     ctx = llm.LLMContext(platform="test", context=None, language="en", assistant="conversation", device_id=None)
@@ -140,7 +142,7 @@ async def test_claude_400_retry_and_auth_error(hass, monkeypatch):
                 if "output_config" in kw:
                     raise APIError(400)  # older models reject effort/fallbacks
                 return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text="ok")])
-    monkeypatch.setattr(a, "_anthropic_client", lambda cfg: C)
+    monkeypatch.setattr(a, "_sdk_client", lambda cfg: C)
     cfg = {"provider": "claude", "api_key": "k", "model": "claude-haiku-4-5"}
     r = await a.complete(hass, cfg, "s", [{"role": "user", "content": "x"}], [])
     assert r.text == "ok" and len(calls) == 2
@@ -152,7 +154,31 @@ async def test_claude_400_retry_and_auth_error(hass, monkeypatch):
             async def create(**kw):
                 calls.append(kw)
                 raise APIError(401)
-    monkeypatch.setattr(a, "_anthropic_client", lambda cfg: D)
+    monkeypatch.setattr(a, "_sdk_client", lambda cfg: D)
     with pytest.raises(HomeAssistantError, match="invalid_auth"):
         await a.complete(hass, cfg, "s", [{"role": "user", "content": "x"}], [])
     assert len(calls) == 3  # no retry on auth errors
+
+
+async def test_final_round_forbids_tools(hass, monkeypatch):
+    seen = []
+
+    async def create(**kw):
+        seen.append(kw)
+        return SimpleNamespace(stop_reason="end_turn", content=[],
+                               choices=[SimpleNamespace(message=SimpleNamespace(content="ok", tool_calls=None))])
+    fake = SimpleNamespace(messages=SimpleNamespace(create=create),
+                           chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(a, "_sdk_client", lambda cfg: fake)
+    tools = [{"name": "Remote", "description": "d", "parameters": {"type": "object"}}]
+    for provider in ("claude", "openai"):
+        await a.complete(hass, {"provider": provider, "api_key": "k", "model": "m"}, "s",
+                         [{"role": "user", "content": "x"}], tools, final=True)
+    assert seen[0]["tool_choice"] == {"type": "none"} and seen[0]["tools"]  # Claude needs them for the history
+    assert "tools" not in seen[1]
+
+
+async def test_media_titles_are_cleaned_for_the_model():
+    hub = SimpleNamespace(library=SimpleNamespace(now_playing=[
+        {"title": "A\u202eB\u200b\x00" + "x" * 200, "player": "TV\n", "position": 1.5, "image": "/art"}]))
+    assert await a._now_playing(hub) == {"now_playing": [{"title": "AB" + "x" * 98, "player": "TV", "position": 1.5}]}

@@ -1,14 +1,14 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from custom_components.homehub_media import hub as hub_mod
 from custom_components.homehub_media.const import DOMAIN
 from custom_components.homehub_media.hub import Hub
-from custom_components.homehub_media.tv import CannotConnect
+from custom_components.homehub_media.tv import CannotConnect, PairingDenied
 
 DATA = {"host": "192.0.2.1", "token": "t", "mac": None}
 OPTS = {
@@ -92,7 +92,7 @@ async def test_send_text_routing(hass):
 async def test_launch_app_routes(hass):
     hub = make_hub(hass)
     hub.activity.current = "off"
-    hub.activity.set.side_effect = lambda activity: setattr(hub.activity, "current", activity)
+    hub.activity.set.side_effect = lambda activity: setattr(hub.activity, "current", activity) or True
     await hub.launch_app("jellyfin")  # not installed, server configured: its web UI in the TV browser
     hub.activity.set.assert_awaited_with("tv")
     hub.tv.open_url.assert_awaited_with("http://192.0.2.7:8096")
@@ -157,6 +157,31 @@ async def test_pc_open_stops_media_ambience_first(hass):
     assert hub.pc_active == "jellyfin"
     await hub.pc_close()
     assert hub.pc_active is None
+    hub.activity.current, hub.activity.set.return_value = "tv", False  # superseded by a newer activity request
+    await hub.pc_open("jellyfin")
+    assert hub.pc_coord.open.await_count == 1 and hub.pc_active is None
+
+
+async def test_pc_input_kept_within_the_coordinator_limits(hass):
+    hub = make_hub(hass)
+    await hub.pointer("move", 500, -500, "pc")
+    hub.pc_coord.pointer_move.assert_awaited_with(160, -160)
+    await hub.pointer("scroll", 0, -500, "pc")
+    hub.pc_coord.scroll.assert_awaited_with(-240)
+    for text in ("é", "a" * 101):
+        with pytest.raises(ServiceValidationError, match="100 plain ASCII"):
+            await hub.send_text(text, "pc")
+    hub.pc_coord.text.assert_not_awaited()
+
+
+async def test_revoked_tv_token_starts_reauth_once(hass):
+    hub = make_hub(hass)
+    hub.tv.send_key.side_effect = PairingDenied("The TV refused the token, pair again")
+    with patch.object(ConfigEntry, "async_start_reauth") as reauth:
+        for _ in range(2):
+            with pytest.raises(PairingDenied):
+                await hub.command(hub.remote("up", "tv"))
+    reauth.assert_called_once_with(hass)
 
 
 async def test_options_ids_override_discovered(hass):
