@@ -1,3 +1,4 @@
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,6 +22,8 @@ async def test_claude_tool_call_parsed(hass, monkeypatch):
             @staticmethod
             async def create(**kw):
                 assert kw["model"] == "claude-opus-5-5" and kw["tool_choice"] == {"type": "auto"}
+                assert kw["output_config"] == {"effort": "low"} and kw["extra_body"] == {"fallbacks": "default"}
+                assert kw["extra_headers"] == {"anthropic-beta": "server-side-fallback-2026-07-01"}
                 return msg
     monkeypatch.setattr(a, "_anthropic_client", lambda cfg: C)
     r = await a.complete(hass, {"provider": "claude", "api_key": "k", "model": "claude-opus-5-5"}, "sys",
@@ -59,11 +62,12 @@ async def test_openai_compatible_for_ollama(hass, monkeypatch):
 
 async def test_tool_validates_and_calls_hub(hass):
     hub = SimpleNamespace(ambience=SimpleNamespace(start=AsyncMock(return_value=None), modes=lambda: [{"id": "dinner", "name": "Dinner"}]))
-    api = a.HomeHubLLMAPI(hass=hass, id=a.API_ID, name="HomeHub Media")
+    api = a.HomeHubLLMAPI(hass)
+    assert (api.id, api.name) == (a.API_ID, "HomeHub Media")
     ctx = llm.LLMContext(platform="test", context=None, language="en", assistant="conversation", device_id=None)
     call = llm.ToolInput("AmbienceStart", {"mode": "dinner"})
     with pytest.raises(HomeAssistantError):  # integration not loaded
-        await (await api.async_get_api_instance(ctx)).async_call_tool(call)
+        await (await api.async_get_api_instance(ctx)).async_call_tool(llm.ToolInput("AmbienceStop", {}))
 
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(hass)
@@ -73,8 +77,9 @@ async def test_tool_validates_and_calls_hub(hass):
     assert "dinner (Dinner)" in inst.api_prompt
     assert await inst.async_call_tool(call) == {"success": True}
     hub.ambience.start.assert_awaited_once_with("dinner")
-    with pytest.raises(vol.Invalid):  # model output is untrusted
-        await inst.async_call_tool(llm.ToolInput("AmbienceStart", {"mode": "../etc"}))
+    for bad in ("../etc", "dinner\n", "reading"):  # model output is untrusted; only configured modes
+        with pytest.raises(vol.Invalid):
+            await inst.async_call_tool(llm.ToolInput("AmbienceStart", {"mode": bad}))
     sleep = next(s for s in a.tool_specs(inst) if s["name"] == "SleepTimer")
     assert sleep["parameters"] == {"type": "object", "required": ["minutes"], "additionalProperties": False,
                                    "properties": {"minutes": {"type": "integer", "minimum": 0, "maximum": 600}}}
@@ -112,3 +117,41 @@ def test_tool_result_turn_conversion():
         {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": "c1", "content": '{"success": true}'},
             {"type": "tool_result", "tool_use_id": "c2", "content": '{"now_playing": []}'}]}]
+    # an empty assistant turn is dropped instead of 400-ing every later request
+    assert a._claude_messages([{"role": "user", "content": "hi"}, {"role": "assistant", "content": ""},
+                               {"role": "user", "content": "again"}]) == [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "text", "text": "again"}]}]
+
+
+class APIError(Exception):  # stands in for anthropic.APIError
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+
+async def test_claude_400_retry_and_auth_error(hass, monkeypatch):
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(APIError=APIError))
+    calls = []
+    class C:
+        class messages:
+            @staticmethod
+            async def create(**kw):
+                calls.append(kw)
+                if "output_config" in kw:
+                    raise APIError(400)  # older models reject effort/fallbacks
+                return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text="ok")])
+    monkeypatch.setattr(a, "_anthropic_client", lambda cfg: C)
+    cfg = {"provider": "claude", "api_key": "k", "model": "claude-haiku-4-5"}
+    r = await a.complete(hass, cfg, "s", [{"role": "user", "content": "x"}], [])
+    assert r.text == "ok" and len(calls) == 2
+    assert calls[1]["model"] == "claude-haiku-4-5" and not {"output_config", "extra_body", "extra_headers"} & set(calls[1])
+
+    class D:
+        class messages:
+            @staticmethod
+            async def create(**kw):
+                calls.append(kw)
+                raise APIError(401)
+    monkeypatch.setattr(a, "_anthropic_client", lambda cfg: D)
+    with pytest.raises(HomeAssistantError, match="invalid_auth"):
+        await a.complete(hass, cfg, "s", [{"role": "user", "content": "x"}], [])
+    assert len(calls) == 3  # no retry on auth errors
