@@ -131,8 +131,9 @@ Also exposed as `sensor.homehub_now_playing` (state = title, attributes = server
 ### Time-of-day ambience (feature 4)
 Options: daypart start times (morning / afternoon / evening / night) → mode per daypart, and an
 "auto-start when idle" switch with N minutes. `homehub_media.ambience_auto` starts the current daypart's mode
-(the card's **Auto** tile calls it). Idle auto-start triggers only when a current-app entity is configured and
-reports the TV on the home screen / no app for N minutes; otherwise auto-start is available via the service only.
+(the card's **Auto** tile calls it). Idle auto-start (switch on) fires when, for N minutes, the TV is on in the
+"TV apps" activity with no ambience, no Plex/Jellyfin session and no HomeHub command; if a current-app entity is
+configured, it must also report the home screen / no app.
 Entity: `switch.homehub_auto_ambience`.
 
 ### Blueprints (feature 5)
@@ -208,8 +209,8 @@ keyboard card.
 ## Error handling
 
 TV unreachable → entities stay available, service raises `HomeAssistantError("TV is off or unreachable")`;
-card shows an inline banner. Pairing denied → config flow error `pairing_denied`. Backend 401/403 → repair issue
-"token mismatch". All network calls have timeouts; no blocking I/O in the event loop (file scans in executor).
+card shows an inline banner. Pairing denied → config flow error `pairing_denied`. Backend 401/403 → error
+"Media PC rejected the token" (service error + card toast). All network calls have timeouts; no blocking I/O in the event loop (file scans in executor).
 
 ## Testing
 
