@@ -9,6 +9,7 @@ Neutral tool format: {"name", "description", "parameters": JSON schema} (see too
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import llm
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.requirements import async_process_requirements
 from homeassistant.util.json import JsonObjectType
 from probatio import to_openapi
@@ -76,8 +78,6 @@ TOOLS = [
             {vol.Required("command"): vol.In(COMMANDS)}, lambda hub, command: hub.remote(command)),
     HubTool("SetActivity", "Switch what the TV shows: off (all off), tv, box (streaming box) or pc (media PC).",
             {vol.Required("activity"): vol.In(ACTIVITIES)}, lambda hub, activity: hub.activity.set(activity)),
-    HubTool("AmbienceStart", "Start an ambience mode (lights, visuals and sound) by its id.",
-            {vol.Required("mode"): vol.Match(r"^[a-z0-9_]{1,64}$")}, lambda hub, mode: hub.ambience.start(mode)),
     HubTool("AmbienceStop", "Stop the running ambience.", {}, lambda hub: hub.ambience.stop()),
     HubTool("AmbienceAuto", "Start the ambience mode set for the current time of day.", {},
             lambda hub: hub.ambience.auto_start()),
@@ -95,12 +95,18 @@ TOOLS = [
 class HomeHubLLMAPI(llm.API):
     """HomeHub Media tools for any HA conversation agent (ours and core Ollama/OpenAI/Anthropic)."""
 
+    def __init__(self, hass: HomeAssistant) -> None:
+        super().__init__(hass=hass, id=API_ID, name="HomeHub Media")
+
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
-        prompt = PROMPT
+        prompt, modes = PROMPT, []
         if entries := self.hass.config_entries.async_loaded_entries(DOMAIN):
             modes = entries[0].runtime_data.ambience.modes()
             prompt += " Ambience modes (id (name)): " + ", ".join(f"{m['id']} ({m['name']})" for m in modes) + "."
-        return llm.APIInstance(api=self, api_prompt=prompt, llm_context=llm_context, tools=TOOLS)
+        start = HubTool("AmbienceStart", "Start an ambience mode (lights, visuals and sound) by its id.",
+                        {vol.Required("mode"): vol.In([m["id"] for m in modes])},
+                        lambda hub, mode: hub.ambience.start(mode))
+        return llm.APIInstance(api=self, api_prompt=prompt, llm_context=llm_context, tools=[*TOOLS, start])
 
 
 def tool_specs(api: llm.APIInstance) -> list[dict]:
@@ -109,16 +115,17 @@ def tool_specs(api: llm.APIInstance) -> list[dict]:
              "parameters": to_openapi(t.parameters, custom_serializer=api.custom_serializer)} for t in api.tools]
 
 
+def _sdk_errors() -> tuple[type[Exception], ...]:
+    """APIError of each SDK already imported (they load lazily; an absent SDK cannot have raised)."""
+    return tuple(m.APIError for n in ("openai", "anthropic") if (m := sys.modules.get(n)))
+
+
 @contextmanager
 def _api_errors() -> Iterator[None]:
     """Network/SDK failures -> HomeAssistantError("invalid_auth"|"cannot_connect"); raw errors never leak."""
     try:
         yield
-    except Exception as err:
-        # SDKs are imported lazily, so their exception classes are matched by module
-        if not isinstance(err, aiohttp.ClientError | TimeoutError) and (
-                type(err).__module__.split(".")[0] not in ("openai", "anthropic")):
-            raise
+    except (aiohttp.ClientError, TimeoutError, *_sdk_errors()) as err:
         status = getattr(err, "status_code", None) or getattr(err, "status", None)
         raise HomeAssistantError("invalid_auth" if status in (401, 403) else "cannot_connect") from err
 
@@ -128,7 +135,8 @@ def _openai_client(cfg: dict) -> Any:
     import openai  # installed on demand by ensure_sdk
 
     url = f"{cfg['url'].rstrip('/')}/v1" if cfg["provider"] == "ollama" else None
-    client = openai.AsyncOpenAI(api_key=cfg.get("api_key") or "ollama", base_url=url, timeout=60)
+    client = openai.AsyncOpenAI(api_key=cfg.get("api_key") or "ollama", base_url=url, timeout=60,
+                                max_retries=1, http_client=cfg["http_client"])
     client.platform_headers()  # the SDK probes the OS (file reads) once and caches it; keep that off the loop
     return client
 
@@ -137,15 +145,18 @@ def _anthropic_client(cfg: dict) -> Any:
     """AsyncAnthropic. Runs in the executor."""
     import anthropic  # installed on demand by ensure_sdk
 
-    client = anthropic.AsyncAnthropic(api_key=cfg["api_key"], timeout=60)
+    client = anthropic.AsyncAnthropic(api_key=cfg["api_key"], timeout=60, max_retries=1,
+                                      http_client=cfg["http_client"])
     client.platform_headers()
     return client
 
 
 async def _client(hass: HomeAssistant, cfg: dict) -> Any:
-    # ponytail: new SDK client (and TLS handshake) per call; cache per (provider, url, key) if latency bites
+    # The executor hop keeps the first SDK import and OS probe off the loop; HA's shared httpx client
+    # (created in the loop) carries the connection pool, so no per-call TLS setup and nothing to close.
+    # ponytail: SDK wrapper object rebuilt per call; cache it per (provider, url, key) if that ever shows
     factory = _anthropic_client if cfg["provider"] == "claude" else _openai_client
-    return await hass.async_add_executor_job(factory, cfg)
+    return await hass.async_add_executor_job(factory, {**cfg, "http_client": get_async_client(hass)})
 
 
 async def ensure_sdk(hass: HomeAssistant, provider: str) -> None:
@@ -161,7 +172,7 @@ async def list_models(hass: HomeAssistant, provider: str, url: str | None, api_k
                 resp.raise_for_status()
                 return [m["name"] for m in (await resp.json()).get("models", [])]
         client = await _client(hass, {"provider": provider, "url": url, "api_key": api_key})
-        return sorted([m.id async for m in client.models.list()])
+        return sorted([m.id async for m in client.with_options(timeout=10, max_retries=0).models.list()])
 
 
 @dataclass
@@ -189,6 +200,8 @@ def _claude_messages(messages: list[dict]) -> list[dict]:
         else:
             role, blocks = m["role"], [{"type": "text", "text": m["content"]}] if m.get("content") else []
             blocks += [{"type": "tool_use", "id": i, "name": n, "input": a} for i, n, a in m.get("tool_calls") or []]
+        if not blocks:  # an empty turn would 400 every later request
+            continue
         if out and out[-1]["role"] == role:  # parallel tool results go back in one user turn
             out[-1]["content"] += blocks
         else:
@@ -212,20 +225,28 @@ async def complete(hass: HomeAssistant, cfg: dict, system: str, messages: list[d
                 model=cfg["model"], messages=_openai_messages(system, messages),
                 **({"tools": [{"type": "function", "function": t} for t in tools]} if tools else {}),
             )).choices[0].message
-            return Reply(msg.content or "", [(c.id, c.function.name, _loads(c.function.arguments))
-                                             for c in msg.tool_calls or []])
+            return Reply(msg.content or getattr(msg, "refusal", None) or "",
+                         [(c.id, c.function.name, _loads(c.function.arguments)) for c in msg.tool_calls or []])
         # ponytail: thinking blocks are not replayed (neutral format), so later tool rounds lose earlier
         # reasoning; carry resp.content via AssistantContent.native if multi-step quality suffers
-        resp = await client.messages.create(
-            model=cfg.get("model") or CLAUDE_MODEL, max_tokens=4096, system=system,
-            messages=_claude_messages(messages),
-            **({"tools": [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
-                          for t in tools],
-                "tool_choice": {"type": "auto"}} if tools else {}),  # forced tool choice 400s on Opus 5.5
-            output_config={"effort": "low"},  # snappy voice; thinking is always on, effort is the control
-            extra_headers={"anthropic-beta": "server-side-fallback-2026-07-01"},
-            extra_body={"fallbacks": "default"},  # SDK 0.108.0 only types the list form
-        )
+        req = {"model": cfg.get("model") or CLAUDE_MODEL, "max_tokens": 4096, "system": system,
+               "messages": _claude_messages(messages),
+               **({"tools": [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
+                             for t in tools],
+                   "tool_choice": {"type": "auto"}} if tools else {})}  # forced tool choice 400s on Opus 5.5
+        try:
+            resp = await client.messages.create(
+                **req,
+                output_config={"effort": "low"},  # snappy voice; thinking is always on, effort is the control
+                extra_headers={"anthropic-beta": "server-side-fallback-2026-07-01"},
+                extra_body={"fallbacks": "default"},  # SDK 0.108.0 only types the list form
+            )
+        except _sdk_errors() as err:
+            if getattr(err, "status_code", None) != 400:
+                raise
+            # ponytail: older models (e.g. claude-haiku-4-5) reject effort/fallbacks; one blind retry without
+            # them; check models.retrieve() capabilities instead if unrelated 400s get retried too often
+            resp = await client.messages.create(**req)
     if resp.stop_reason == "refusal":
         return Reply(REFUSAL)
     return Reply("".join(b.text for b in resp.content if b.type == "text"),
