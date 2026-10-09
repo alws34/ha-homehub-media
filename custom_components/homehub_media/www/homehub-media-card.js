@@ -50,6 +50,16 @@ const nextTarget = (current, targets, dir) => {
   const i = list.indexOf(current);
   return i < 0 ? "tv" : list[(i + dir + list.length) % list.length];
 };
+// where typed text/keys land for the card's target; with a keyboard bridge the card omits the target and this
+// mirrors hub._text_target
+const textRoute = (snap, target) => {
+  if (target === "pc") return "pc";
+  if (target === "box") return "keyboard";
+  if (!snap?.targets?.keyboard) return "tv";
+  if (snap.activity?.current === "pc") return "pc";
+  return snap.tv?.keyboard_active ? "tv" : "keyboard";
+};
+const canSeek = (snap) => snap?.activity?.current !== "pc";  // the PC has no rewind/fast-forward
 const safeUrl = (u) => {
   if (!u) return null;
   try {
@@ -265,12 +275,13 @@ class HomeHubMediaCard extends HTMLElement {
 
   _textTarget() {
     const t = this._eff();
-    if (t === "pc") return "pc";
-    if (t === "box") return "keyboard";
-    return this._snap?.targets?.keyboard ? undefined : "tv";  // undefined: hub picks TV IME or keyboard bridge
+    // undefined: the hub picks TV IME or keyboard bridge from its live state
+    return t === "tv" && this._snap?.targets?.keyboard ? undefined : textRoute(this._snap, t);
   }
 
   _kbd(service, data) {
+    // the TV's on-screen keyboard only has Enter, so clear/backspace there would just error
+    if (service === "keyboard_key" && data.key !== "enter" && textRoute(this._snap, this._eff()) === "tv") return undefined;
     const target = this._textTarget();
     return this._call(service, target ? { ...data, target } : data);
   }
@@ -330,7 +341,7 @@ class HomeHubMediaCard extends HTMLElement {
       if (s && s.tv?.available === false) return banner("TV is off or unreachable", "mdi:television-off", "banner");
       return "";
     });
-    this._sec("np", (s?.now_playing ?? []).slice(0, 1).map(({ position, ...rest }) => rest), () => this._npHtml());
+    this._sec("np", [canSeek(s), (s?.now_playing ?? []).slice(0, 1).map(({ position, ...rest }) => rest)], () => this._npHtml());
     this._tickNp();
     this._sec("tabs", [tabs.length > 1 && tabs, this._tab], () => (tabs.length < 2 ? "" : tabs.map((t) => {
       const on = t === this._tab;
@@ -390,6 +401,7 @@ class HomeHubMediaCard extends HTMLElement {
     if (!n) return "";
     const playing = n.state === "playing";
     const sub = [n.subtitle, n.player].filter(Boolean).join(" · ");
+    const seek = canSeek(this._snap);
     // no target: the hub routes these by the current activity
     return `<div class="np">
       ${img(n.image, "npbg")}
@@ -400,9 +412,9 @@ class HomeHubMediaCard extends HTMLElement {
         <div class="nptime"><span data-npt></span><span>${n.duration ? fmtTime(n.duration) : ""}</span></div>
       </div>
       <div class="npbtns">
-        <button class="ib flat" data-a="np" data-v="rewind" aria-label="Back 30 seconds">${icon("mdi:rewind-30")}</button>
+        ${seek ? `<button class="ib flat" data-a="np" data-v="rewind" aria-label="Back 30 seconds">${icon("mdi:rewind-30")}</button>` : ""}
         <button class="ib accent" data-a="np" data-v="${playing ? "pause" : "play"}" aria-label="${playing ? "Pause" : "Play"}">${icon(playing ? "mdi:pause" : "mdi:play")}</button>
-        <button class="ib flat" data-a="np" data-v="fast_forward" aria-label="Forward 30 seconds">${icon("mdi:fast-forward-30")}</button>
+        ${seek ? `<button class="ib flat" data-a="np" data-v="fast_forward" aria-label="Forward 30 seconds">${icon("mdi:fast-forward-30")}</button>` : ""}
       </div>
     </div>`;
   }
@@ -650,7 +662,7 @@ class HomeHubMediaCard extends HTMLElement {
     const a = this._snap.ambience || {};
     this._sec("amberr", [a.error], () => (a.error ? banner(a.error) : ""));
     this._sec("ambmain", this._ambSlice(), () => (this._edit ? this._editorHtml() : this._modesHtml()));
-    const until = a.sleep_until ? new Date(typeof a.sleep_until === "number" ? a.sleep_until * 1000 : a.sleep_until).getTime() : null;
+    const until = a.sleep_until ? new Date(a.sleep_until).getTime() : null;
     const mins = until ? Math.max(0, Math.ceil((until - Date.now()) / 60000)) : null;
     this._sec("sleep", [mins], () => `<h3 class="sh">${icon("mdi:power-sleep")}Sleep timer${mins != null ? `<span class="note">Off in ${fmtMins(mins)}</span>` : ""}</h3>
       <div class="chips">
@@ -1373,4 +1385,4 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === TAG)) {
   window.customCards.push({ type: TAG, name: "HomeHub Media", description: "Remote, ambience and library", preview: true });
 }
-if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget };
+if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek };

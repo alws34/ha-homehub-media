@@ -201,6 +201,7 @@ const fail = (message) => Promise.reject({ code: "home_assistant_error", message
 const services = {
   remote({ command, target }) {
     const tv = snap.tv;
+    if (snap.activity.current === "pc" && (command === "rewind" || command === "fast_forward")) return fail("Not supported on the PC");
     if (command === "volume_up") tv.volume = Math.min(100, tv.volume + 1);
     else if (command === "volume_down") tv.volume = Math.max(0, tv.volume - 1);
     else if (command === "mute") tv.muted = !tv.muted;
@@ -216,7 +217,10 @@ const services = {
   send_text({ target }) {
     if ((target ?? "tv") === "tv" && !snap.tv.keyboard_active) return fail("No text field is focused on the TV");
   },
-  keyboard_key() {},
+  keyboard_key({ key, target }) {
+    const t = target ?? (snap.activity.current === "pc" ? "pc" : snap.tv.keyboard_active || !snap.targets.keyboard ? "tv" : "keyboard");
+    if (t === "tv" && key !== "enter") return fail(`The TV's on-screen keyboard has no ${key} key; it needs the keyboard bridge`);
+  },
   pointer({ action, target }) {
     if (target === "tv" && action !== "move" && action !== "click") return fail("Not supported on the TV");
   },
