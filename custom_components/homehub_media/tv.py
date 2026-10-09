@@ -122,6 +122,7 @@ class SamsungTV:
         self._text_sent = False
         self._yt_video: str | None = None  # the video to loop, set from play_youtube() to stop_youtube()
         self._yt_now: str | None = None  # the video YouTube last reported
+        self._yt_from0 = False  # YouTube resumes where it was last watched: seek to 0:00 once it plays
         self._yt_api: YtLoungeApi | None = None
         self._yt_sub: asyncio.Task | None = None  # the lounge session's event stream
         self._yt_lock = asyncio.Lock()
@@ -300,9 +301,15 @@ class SamsungTV:
             self._yt_now = event.video_id
             if event.video_id and event.video_id == self._yt_video:
                 self._yt_started.set()
+        if (self._yt_from0 and self._yt_video and self._yt_now == self._yt_video and event.state is State.Playing
+                and (event.current_time or 0) > 3):
+            self._yt_from0 = False
+            with contextlib.suppress(*LOUNGE_ERRORS):
+                await self._yt_api.seek_to(0)
         # YouTube's "ended" (code 0, State.Buffering) at the end: play it again (seek_to(0) does nothing then)
         if (self._yt_video and self._yt_now == self._yt_video and event.state is State.Buffering
                 and event.duration and (event.current_time or 0) >= event.duration):
+            self._yt_from0 = True
             with contextlib.suppress(*LOUNGE_ERRORS):
                 await self._yt_api.play_video(self._yt_video)
 
@@ -311,8 +318,14 @@ class SamsungTV:
         only while it is open, and a cold start may drop the session: retry until it reports the video."""
         if not YT_ID_RE.fullmatch(video_id):
             raise ServiceValidationError("Invalid YouTube video id")
-        self._yt_video = video_id
-        if not (await self.app_info(app_id) or {}).get("visible"):
+        self._yt_video, self._yt_from0 = video_id, True
+        if self._yt_now == video_id and self._yt_api and self._yt_api.connected():  # already on: no NowPlaying
+            with contextlib.suppress(*LOUNGE_ERRORS):
+                if await self._yt_api.seek_to(0):
+                    return
+        # DIAL, not REST: a REST-launched YouTube without a video quits after ~5 s (verified on Tizen 6.5)
+        if (not (await self.app_info(app_id) or {}).get("visible")
+                and (await self._dial("POST", ""))[0] not in (200, 201)):
             await self.launch(app_id)
         deadline = time.monotonic() + YT_START_SECS
         while True:
@@ -346,7 +359,7 @@ class SamsungTV:
 
     async def _drop_lounge(self) -> None:
         """End the lounge session (caller holds _yt_lock); the next _lounge() opens a new one."""
-        api, self._yt_api = self._yt_api, None
+        api, self._yt_api, self._yt_now = self._yt_api, None, None
         if self._yt_sub:
             self._yt_sub.cancel()
         if api and api.connected():
