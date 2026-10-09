@@ -198,7 +198,8 @@ class AmbienceManager:
             need_activity = not mode["lights_only"] and (
                 self._backend == "pc" or self._hub.activity.current != "tv" or not self._hub.tv.available)
             # TV page already up and staying up: swap media in place (the page changes URLs without a reload)
-            swap = self.uses_media and self._backend == "tv" and not mode["lights_only"] and not need_activity
+            swap = (self.uses_media and self._backend == "tv" and not mode["lights_only"] and not need_activity
+                    and time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS)  # page still polling
             if self.mode != "off":  # switching: keep the pre-ambience snapshot if the new mode drives lights
                 # ponytail: lights only the new mode touches are not in the kept snapshot, so stay as set
                 await self._stop(restore_lights=not lighting, keep_page=swap)
@@ -256,6 +257,8 @@ class AmbienceManager:
             if not swap:
                 await self._hub.tv.open_url(self._page_url())
                 self.page_last_seen = time.monotonic()  # counts as alive while it loads
+                self._jobs.append(async_call_later(self.hass, ENTER_DELAY_SECS, self._press_enter))
+            elif time.monotonic() - self._started < ENTER_DELAY_SECS:  # swapped before the autoplay key fired
                 self._jobs.append(async_call_later(self.hass, ENTER_DELAY_SECS, self._press_enter))
         self._started = time.monotonic()
         self._jobs.append(async_track_time_interval(
