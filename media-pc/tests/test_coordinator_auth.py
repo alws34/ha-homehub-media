@@ -12,7 +12,7 @@ import media_hub_coordinator as co
 
 TOKEN = "t" * 40
 JELLYFIN = {"jellyfin": {"unit": "jellyfin-browser.service", "home_url": "http://127.0.0.1:8096/web/"}}
-CLIENTS = {  # plex first, so "first configured" cannot be confused with a jellyfin default
+CLIENTS = {
     "plex": {"unit": "plex-browser.service", "home_url": "http://127.0.0.1:32400/web/"},
     "sonarr": {"unit": "sonarr-browser.service", "home_url": "http://127.0.0.1:8989/", "tab_navigation": True},
 }
@@ -157,10 +157,12 @@ class CoordinatorTest(unittest.TestCase):
         self.addCleanup(srv.shutdown)
         return srv.server_address[1]
 
-    def test_bare_open_starts_first_configured_client(self):
+    def test_open_needs_a_client_name(self):
         systemctl = FakeSystemctl()
-        self.assertEqual(request(self.serve(systemctl), "POST", "/v1/open"), 200)
-        self.assertEqual(systemctl.active, {"plex-browser.service"})
+        port = self.serve(systemctl)
+        self.assertEqual(request(port, "POST", "/v1/open"), 404)  # the bare legacy route is gone
+        self.assertEqual(request(port, "POST", "/v1/open/sonarr"), 200)
+        self.assertEqual(systemctl.active, {"sonarr-browser.service"})
 
     def test_systemctl_missing_or_timing_out_is_409(self):
         for error in (FileNotFoundError("systemctl"), subprocess.TimeoutExpired("systemctl", 20)):

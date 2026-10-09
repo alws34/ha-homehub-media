@@ -18,7 +18,7 @@ Control a Samsung TV, run ambience (video, soundtrack and lights), and browse Pl
   - Launch or restart Netflix, YouTube, Prime Video, Disney+, Apple TV, Max, Plex, Jellyfin, Spotify, Twitch, Paramount+, and the TV's Browser.
   - Type into the TV's on-screen keyboard, and use a touchpad pointer in the TV browser.
 - **Ambience**: a looping video (visual) and a separate soundtrack per mode, from local files or internet radio.
-  - A mode can switch on a lighting scene and flicker chosen lights like a fire. The previous lighting comes back when the mode stops.
+  - A mode can switch on a lighting scene and flicker chosen lights like a fire. The previous lighting comes back when the mode stops. If Home Assistant restarts while a mode runs, the previous lighting cannot be restored, because the snapshot is kept only in memory.
   - Change the visual or soundtrack while a mode runs, mark favourites, and mix the two volumes.
   - Sleep timer that fades out, and time-of-day auto ambience.
 - **Plex and Jellyfin**: Continue Watching and Recently Added rows. Tap a title to open the app on the TV and play it. A Now Playing strip shows the current session with play or pause, rewind, and fast forward buttons.
@@ -202,7 +202,7 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 | `send_key` | `key`, *`hold_secs`* | Sends a raw Samsung key such as `KEY_HDMI1` to the TV. `hold_secs` is 0 to 5. |
 | `launch_app` | `app` | Opens an app on the TV by app key (`netflix`, `youtube`, `prime_video`, `disney_plus`, `apple_tv`, `max`, `plex`, `jellyfin`, `spotify`, `twitch`, `paramount_plus`, `browser`) or by TV app ID. Switches the activity to Samsung TV and stops ambience that plays video or sound. |
 | `restart_app` | `app` | Closes and reopens an app on the TV. Same values as `launch_app`. |
-| `send_text` | `text`, *`target`* | Types 1 to 200 printable characters. `target` is `tv`, `pc`, or `keyboard`. Without it, text goes to the media PC when that is the activity, otherwise to the TV if its on-screen keyboard is open or no keyboard bridge is set up, otherwise to the keyboard bridge. |
+| `send_text` | `text`, *`target`* | Types 1 to 200 printable characters. The media PC accepts at most 100, and only plain ASCII. `target` is `tv`, `pc`, or `keyboard`. Without it, text goes to the media PC when that is the activity, otherwise to the TV if its on-screen keyboard is open or no keyboard bridge is set up, otherwise to the keyboard bridge. |
 | `keyboard_key` | `key`, *`target`* | Presses `backspace`, `enter`, or `clear`. `target` works as for `send_text`. The TV's on-screen keyboard supports only `enter`. |
 | `pointer` | `action`, *`dx`*, *`dy`*, *`target`* | `action` is `move`, `click`, `right_click`, or `scroll`. `dx` and `dy` (-500 to 500) set the move distance, and `dy` sets the scroll amount. `target` is `tv` or `pc`, and defaults to the PC when that is the activity, otherwise the TV. The TV supports only `move` and `click`. |
 | `set_activity` | `activity`, *`force`* | Switches to `off`, `tv`, `box`, or `pc`. With `force`, an input switch by source name is sent at least twice, for TVs that ignore the first one. |
@@ -214,8 +214,8 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 | `set_favorite` | `kind`, `media_id`, `favorite` | Marks (`favorite: true`) or unmarks a `visual` or `soundtrack` as a favourite. |
 | `ambience_auto` | | Starts the mode set for the current time of day. Fails if none is set. |
 | `ambience_sleep_timer` | `minutes` | Stops ambience after `minutes` (0 to 600). 0 cancels the timer. Needs a running mode. |
-| `refresh_catalog` | | Rescans the ambience folders (or the media PC) for visuals and soundtracks. |
-| `rescan_apps` | | Asks the TV which streaming apps are installed. The TV must be on. |
+| `refresh_catalog` | | Rescans the ambience folders (or the media PC) for visuals and soundtracks. Admin users only. |
+| `rescan_apps` | | Asks the TV which streaming apps are installed. The TV must be on. Admin users only. |
 | `play_library_item` | `server`, `item_id` | Opens Plex or Jellyfin on the TV and plays an item. `server` is `plex` or `jellyfin`, and `item_id` is the item's ID on that server. |
 | `pc_open` | `client` | Opens an app on the media PC by its name, as listed in the Media PC options. Switches the activity to Media PC and stops ambience that plays video or sound. |
 | `pc_close` | | Closes the app open on the media PC. |
@@ -280,6 +280,8 @@ Open the settings of your Ollama, OpenAI, or Anthropic conversation agent. Under
 
 The tools can open apps, press remote buttons on the current activity's device, switch activity, start a mode, start the mode for the current time of day, stop ambience, set the sleep timer, turn quiet mode on and off, play a Plex or Jellyfin title from Continue Watching or Recently Added by name, and report what is playing. They control only HomeHub.
 
+Titles and session names from Plex and Jellyfin reach the language model as untrusted text. If other people can add media to your server (a shared Plex or Jellyfin library), do not turn on the HomeHub Media API in an agent that also has broad Assist control of your home, because a crafted title could try to steer that agent.
+
 ## TV limitations
 
 These come from the TV, not from HomeHub.
@@ -296,7 +298,7 @@ These come from the TV, not from HomeHub.
 
 ## Media PC
 
-The media PC is optional. HomeHub Media does not install the Ubuntu side. Set it up with [media-pc/README.md](media-pc/README.md), which covers the user services, tokens, and firewall.
+The media PC is optional. HomeHub Media does not install the Ubuntu side. Set it up with [media-pc/README.md](media-pc/README.md), which covers the user services, tokens, and firewall. Generate a separate token for each of the two daemons, and do not skip the firewall step: only Home Assistant should reach ports 8097 and 8098.
 
 ## Upgrading from the YAML bundle
 
@@ -311,16 +313,17 @@ HomeHub Media replaces the HomeHub Media Controller & Ambience bundle (YAML pack
 2. Install and set up HomeHub Media as described above.
 3. Ambience profiles and favourites now live in Home Assistant and are not imported. Add any custom modes in **Configure › Ambience modes**. Then open each mode in the card, choose its visual and soundtrack, and select **Save** once. Mark your favourites again.
 4. Update automations and scripts that used the old helpers and scripts to use the [entities](#entities) and [services](#services) above.
-5. **Media PC users**: update both daemons and their systemd units from [media-pc/](media-pc/README.md). Both configs now need an `auth_token` of at least 32 characters, and the daemons refuse to start without one. Enter the tokens in **Configure › Media PC**. See [Upgrading from the YAML bundle](media-pc/README.md#upgrading-from-the-yaml-bundle) in the media PC guide. Preview images in `www/Ambience` keep working.
+5. **Media PC users**: update both daemons and their systemd units from [media-pc/](media-pc/README.md). Both configs now need an `auth_token` of at least 32 characters (use a different one for each daemon), and the daemons refuse to start without one. Enter the tokens in **Configure › Media PC**. See [Upgrading from the YAML bundle](media-pc/README.md#upgrading-from-the-yaml-bundle) in the media PC guide. Preview images in `www/Ambience` keep working.
 
 ## Security
 
-- Every service and WebSocket command goes through Home Assistant's authentication. Only signed-in users and authorised automations can call them.
-- The TV ambience page and its media files use Home Assistant signed URLs that expire after 24 hours.
+- Every service and WebSocket command goes through Home Assistant's authentication. Only signed-in users and authorised automations can call them. `rescan_apps` and `refresh_catalog` are limited to admin users.
+- The TV ambience page link is signed and tied to one ambience session. It stops working when that ambience stops. Links to ambience media files are signed and expire after 24 hours. Restarting Home Assistant revokes all signed links.
 - Plex and Jellyfin tokens stay in Home Assistant. Artwork goes through an authenticated Home Assistant proxy, so the tokens never reach the browser or the TV.
-- The media PC daemons accept a request only if it comes from an allowed IP address, names a configured host, carries the bearer token, and sends a JSON body. Both daemons require a token of at least 32 printable characters with no spaces.
-- Tip: on the media PC firewall, allow ports 8097 and 8098 only from the Home Assistant host.
-- The ESP32 keyboard bridge key is sent over plain HTTP on your local network. The media PC requests (including the bearer tokens) also use plain HTTP, and so do Plex and Jellyfin requests when the server URL starts with `http://`. Anyone who can capture traffic on your LAN can read these values. Keep the network trusted, or put these devices on a separate network segment that only Home Assistant can reach.
+- Titles from shared Plex or Jellyfin servers are untrusted text for the voice assistant. See [Voice assistant](#voice-assistant).
+- **Media PC**: the daemons accept a request only if it comes from an allowed IP address, names a configured host, carries the bearer token, and sends a JSON body. Both require a token of at least 32 printable characters with no spaces. Give each daemon its own token, and do the required firewall step in [media-pc/README.md](media-pc/README.md) so only Home Assistant can reach ports 8097 and 8098.
+- **ESP32 keyboard bridge**: HomeHub sends the shared key in clear text over plain HTTP, so anyone who can capture your LAN traffic can read it and type on the bridge. Your bridge firmware should compare the key in constant time, accept requests only from the Home Assistant IP address, and ideally require signed timestamps so a captured request cannot be replayed. Put the bridge on a dedicated IoT VLAN or SSID that only Home Assistant can reach.
+- The media PC requests (including the bearer tokens) also use plain HTTP, and so do Plex and Jellyfin requests when the server URL starts with `http://`. Anyone who can capture traffic on your LAN can read these values. Keep the network trusted, or put these devices on a separate network segment that only Home Assistant can reach.
 - Keys and tokens are stored in Home Assistant's configuration. Anyone with access to the Home Assistant config folder can read them.
 
 ## Troubleshooting

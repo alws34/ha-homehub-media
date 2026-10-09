@@ -87,6 +87,8 @@ class AuthTest(unittest.TestCase):
     def test_removed_routes_404(self):
         self.assertEqual(self.req("GET", "/v2/profiles"), 404)
         self.assertEqual(self.req("POST", "/v1/play/rain"), 404)
+        for path in ("/v2/pause", "/v2/resume", "/v2/video/stop", "/v2/soundtrack/resume"):
+            self.assertEqual(self.req("POST", path), 404)
 
     def test_short_token_rejected(self):
         for token in ("short", "t" * 20 + " " + "t" * 20):
