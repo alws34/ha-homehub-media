@@ -79,3 +79,9 @@ async def test_sensors(hass, setup_entry):
     assert state.state == "x" * 255
     assert state.attributes["subtitle"] == "S1E2" and state.attributes["position"] == 12.0
     assert "image" not in state.attributes and "entity_picture" not in state.attributes
+
+
+def test_now_playing_position_not_recorded():
+    from custom_components.homehub_media.sensor import NowPlayingSensor
+
+    assert {"position", "duration"} <= NowPlayingSensor._Entity__combined_unrecorded_attributes
