@@ -23,7 +23,11 @@ PLEX_PATH_RE = re.compile(r"/library/metadata/\d+/(?:thumb|art)/\d+", re.ASCII) 
 ART = "/api/homehub_media/art"
 TICKS = 10_000_000  # Jellyfin ticks per second
 # request failures plus malformed server payloads; messages never contain credentials
-_FAILURES = (HomeAssistantError, LookupError, TypeError, AttributeError, ValueError)
+FAILURES = (HomeAssistantError, LookupError, TypeError, AttributeError, ValueError)
+
+
+class InvalidAuth(HomeAssistantError):
+    """The server rejected the token / API key (HTTP 401/403)."""
 
 
 def _check_id(value: str) -> str:
@@ -66,7 +70,9 @@ class _Server:
                     raise HomeAssistantError(f"{self.name} {path}: not an image")
                 return await resp.read(), resp.content_type
         except (aiohttp.ClientError, TimeoutError) as err:
-            raise HomeAssistantError(f"{self.name} {path} failed: {getattr(err, 'status', type(err).__name__)}") from None
+            status = getattr(err, "status", None)
+            raise (InvalidAuth if status in (401, 403) else HomeAssistantError)(
+                f"{self.name} {path} failed: {status or type(err).__name__}") from None
 
     async def _json(self, path: str, params: dict | None = None):
         body, _ = await self._req(path, params)
@@ -143,7 +149,7 @@ class PlexServer(_Server):
             await self.hass.services.async_call("media_player", "play_media", {
                 "entity_id": entity, "media_content_type": "movie",
                 "media_content_id": f"plex://{machine}/{item_id}?resume=1"}, blocking=True)
-        except _FAILURES as err:
+        except FAILURES as err:
             _LOGGER.debug("plex play failed: %s", err)  # caller retries while the TV app starts
             return False
         return True
@@ -165,6 +171,10 @@ class JellyfinServer(_Server):
             "progress": _frac((m.get("UserData") or {}).get("PlaybackPositionTicks"), m.get("RunTimeTicks")),
             "image": f"{ART}/jellyfin/{m['Id']}",
         }
+
+    async def users(self) -> list[dict]:
+        """[{"id", "name"}] of the server's users (needs an admin API key)."""
+        return [{"id": str(u["Id"]), "name": str(u.get("Name") or u["Id"])} for u in await self._json("/Users")]
 
     async def continue_watching(self) -> list[dict]:
         data = await self._json("/UserItems/Resume", {"userId": self._user, "limit": 20, "mediaTypes": "Video"})
@@ -209,7 +219,7 @@ class JellyfinServer(_Server):
             await self._req(
                 f"/Sessions/{_check_id(session['Id'])}/Playing",
                 {"playCommand": "PlayNow", "itemIds": item_id, "startPositionTicks": ticks}, method="POST")
-        except _FAILURES as err:
+        except FAILURES as err:
             _LOGGER.debug("jellyfin play failed: %s", err)  # caller retries while the TV app starts
             return False
         return True
@@ -229,7 +239,7 @@ class Library:
         async def one(s) -> None:
             try:
                 self.items[s.name] = {"continue": await s.continue_watching(), "recent": await s.recently_added()}
-            except _FAILURES as err:
+            except FAILURES as err:
                 _LOGGER.warning("%s library refresh failed: %s", s.name, err)
 
         before = dict(self.items)
@@ -241,7 +251,7 @@ class Library:
         async def one(s) -> list[dict]:
             try:
                 return await s.sessions()
-            except _FAILURES as err:
+            except FAILURES as err:
                 _LOGGER.debug("%s session refresh failed: %s", s.name, err)  # polled every 10 s: no warning spam
                 return []
 

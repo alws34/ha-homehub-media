@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Awaitable
 from copy import deepcopy
 from typing import Any
 from urllib.parse import urlsplit
@@ -64,7 +65,8 @@ from .tv import APP_ID_RE, KEY_RE, PairingDenied, SamsungTV
 
 LABEL_RE = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
 MAC_RE = re.compile(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}")
-NEW_MODE = "__new__"  # slugify() strips leading "_", so no mode id can collide
+NEW_MODE = "add-new"  # slugify() never emits "-", so no mode id can collide
+SECRETS = ("token", "api_key", "ambient_token", "coord_token", "key")
 PARTS = ("morning", "afternoon", "evening", "night")
 OLLAMA_URL = "http://homeassistant.local:11434"
 MENU = ["tv", "apps", "servers", "box", "pc", "keyboard", "ambience", "modes", "volume", "dayparts", "assistant",
@@ -178,9 +180,19 @@ def _input(raw: dict) -> dict:
     return {"method": raw["method"], "value": (raw.get("value") or "").strip()}
 
 
-def _http_error(err: Exception) -> str:
-    """library raises `from None`; the aiohttp status still rides on __context__."""
-    return "invalid_auth" if getattr(err.__context__, "status", None) in (401, 403) else "cannot_connect"
+def _public(saved: dict | None) -> dict:
+    """Saved values minus secrets: keys never go back to the browser, and a blank secret field keeps the saved one."""
+    return {k: v for k, v in (saved or {}).items() if k not in SECRETS}
+
+
+async def _probe(call: Awaitable) -> tuple[Any, str | None]:
+    """(result, None), or (None, form error key) when a server refuses or fails."""
+    try:
+        return await call, None
+    except (library.InvalidAuth, pc.PCAuthError):
+        return None, "invalid_auth"
+    except library.FAILURES:  # any HomeAssistantError (PCError included) or a malformed reply
+        return None, "cannot_connect"
 
 
 class HomeHubConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -331,59 +343,57 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
 
     async def async_step_plex(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        saved = self._section(OPT_SERVERS).get("plex") or {}
         core = next((e.data.get("server_config") for e in
                      self.hass.config_entries.async_entries("plex", include_ignore=False)), None) or {}
         if user_input is not None:
-            if user_input.get("prefill") and core:  # only on the user's explicit request
-                user_input = {**user_input, "url": core.get("url"), "token": core.get("token"), "prefill": False}
-            if not (url := user_input.get("url")):
+            if user_input.get("prefill") and core:  # the core entry is read only on the user's explicit request
+                url, token = core.get("url"), core.get("token", "")
+            else:
+                url, token = user_input.get("url"), user_input.get("token") or saved.get("token", "")
+            if not url:
                 return self._set_server("plex", None)
             if not _url_ok(url):
                 errors["url"] = "invalid_url"
             else:
-                value = {"url": url, "token": user_input.get("token", ""), "player": user_input.get("player") or None}
-                try:
-                    await library.PlexServer(self.hass, url, value["token"], None).continue_watching()
-                except library._FAILURES as err:
-                    errors["base"] = _http_error(err)
-                else:
-                    return self._set_server("plex", value)
+                _, err = await _probe(library.PlexServer(self.hass, url, token, None).continue_watching())
+                if not err:
+                    return self._set_server("plex", {"url": url, "token": token,
+                                                     "player": user_input.get("player") or None})
+                errors["base"] = err
         schema = PLEX_SCHEMA.extend({vol.Optional("prefill", default=False): BooleanSelector()}) if core else PLEX_SCHEMA
-        return self._form("plex", schema, user_input or self._section(OPT_SERVERS).get("plex"), errors)
+        return self._form("plex", schema, user_input or _public(saved), errors)
 
     async def async_step_jellyfin(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        saved = self._section(OPT_SERVERS).get("jellyfin") or {}
         if user_input is not None:
             if not (url := user_input.get("url")):
                 return self._set_server("jellyfin", None)
             if not _url_ok(url):
                 errors["url"] = "invalid_url"
             else:
-                self._pending = {"url": url, "api_key": user_input.get("api_key", "")}
-                server = library.JellyfinServer(self.hass, url, self._pending["api_key"], "", None)
-                try:
-                    self._choices = [{"value": str(u["Id"]), "label": str(u.get("Name") or u["Id"])}
-                                     for u in await server._json("/Users")]
-                except library._FAILURES as err:
-                    errors["base"] = _http_error(err)
-                else:
+                self._pending = {"url": url, "api_key": user_input.get("api_key") or saved.get("api_key", "")}
+                users, err = await _probe(library.JellyfinServer(self.hass, url, self._pending["api_key"], "",
+                                                                 None).users())
+                if not err:
+                    self._choices = [{"value": u["id"], "label": u["name"]} for u in users]
                     return await self.async_step_jellyfin_user()
-        return self._form("jellyfin", JELLYFIN_SCHEMA, user_input or self._section(OPT_SERVERS).get("jellyfin"),
-                          errors)
+                errors["base"] = err
+        return self._form("jellyfin", JELLYFIN_SCHEMA, user_input or _public(saved), errors)
 
     async def async_step_jellyfin_user(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
             value = {**self._pending, "user_id": user_input["user_id"], "player": user_input.get("player") or None}
-            try:
-                await library.JellyfinServer(self.hass, value["url"], value["api_key"], value["user_id"],
-                                             None).continue_watching()
-            except library._FAILURES as err:
-                errors["base"] = _http_error(err)
-            else:
+            _, err = await _probe(library.JellyfinServer(self.hass, value["url"], value["api_key"], value["user_id"],
+                                                         None).continue_watching())
+            if not err:
                 return self._set_server("jellyfin", value)
+            errors["base"] = err
         schema = vol.Schema({vol.Required("user_id"): _select(self._choices), vol.Optional("player"): TEXT})
-        return self._form("jellyfin_user", schema, user_input or self._section(OPT_SERVERS).get("jellyfin"), errors)
+        return self._form("jellyfin_user", schema, user_input or _public(self._section(OPT_SERVERS).get("jellyfin")),
+                          errors)
 
     async def async_step_box(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -398,39 +408,43 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
 
     async def async_step_pc(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        saved = self._section(OPT_PC)
         if user_input is not None:
             if not (host := (user_input.get("host") or "").strip()):
                 if self._section(OPT_AMBIENCE).get("backend") == "pc":  # nothing left to play on
                     self._options[OPT_AMBIENCE] = {**self._section(OPT_AMBIENCE), "backend": "tv"}
                 return self._set(OPT_PC, None)
+            try:  # K6 pc_open takes a slug
+                clients = [cv.slug(c.strip()) for c in user_input.get("clients") or [] if c.strip()]
+            except vol.Invalid:
+                clients = None
             value = {"host": host, "ambient_port": int(user_input["ambient_port"]),
-                     "ambient_token": user_input.get("ambient_token", ""),
-                     "coord_port": int(user_input["coord_port"]), "coord_token": user_input.get("coord_token", ""),
-                     "input": _input(user_input["input"]),
-                     "clients": [c.strip() for c in user_input.get("clients") or [] if c.strip()]}
+                     "ambient_token": user_input.get("ambient_token") or saved.get("ambient_token", ""),
+                     "coord_port": int(user_input["coord_port"]),
+                     "coord_token": user_input.get("coord_token") or saved.get("coord_token", ""),
+                     "input": _input(user_input["input"]), "clients": clients}
             if not _host_ok(host):
                 errors["host"] = "invalid_host"
-            elif not all(catalog.ID_RE.fullmatch(c) for c in value["clients"]):
-                errors["clients"] = "invalid_id"
+            elif clients is None:
+                errors["clients"] = "invalid_client"
             elif not (errors := self._input_errors(value["input"])):
-                try:
-                    await pc.AmbientPlayerClient(self.hass, host, value["ambient_port"], value["ambient_token"]).status()
-                    await pc.CoordinatorClient(self.hass, host, value["coord_port"], value["coord_token"]).status()
-                except pc.PCError as err:
-                    errors["base"] = "invalid_auth" if str(err) == pc._REJECTED[401] else "cannot_connect"
-                else:
+                ambient = pc.AmbientPlayerClient(self.hass, host, value["ambient_port"], value["ambient_token"])
+                coord = pc.CoordinatorClient(self.hass, host, value["coord_port"], value["coord_token"])
+                if not (err := (await _probe(ambient.status()))[1] or (await _probe(coord.status()))[1]):
                     return self._set(OPT_PC, value)
-        return self._form("pc", PC_SCHEMA, user_input or self._options.get(OPT_PC), errors)
+                errors["base"] = err
+        return self._form("pc", PC_SCHEMA, user_input or _public(saved), errors)
 
     async def async_step_keyboard(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        saved = self._section(OPT_KEYBOARD)
         if user_input is not None:
             if not (host := (user_input.get("host") or "").strip()):
                 return self._set(OPT_KEYBOARD, None)
             if _host_ok(host):
-                return self._set(OPT_KEYBOARD, {"host": host, "key": user_input.get("key", "")})
+                return self._set(OPT_KEYBOARD, {"host": host, "key": user_input.get("key") or saved.get("key", "")})
             errors["host"] = "invalid_host"
-        return self._form("keyboard", KEYBOARD_SCHEMA, user_input or self._options.get(OPT_KEYBOARD), errors)
+        return self._form("keyboard", KEYBOARD_SCHEMA, user_input or _public(saved), errors)
 
     async def async_step_ambience(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -452,31 +466,39 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
                                                              "radio": _join(ambience.get("radio") or {}, "\n")}, errors)
 
     def _modes(self) -> list[dict]:
-        return self._options.get(OPT_MODES, DEFAULT_MODES)
+        return self._options.get(OPT_MODES) or DEFAULT_MODES
 
     async def async_step_modes(self, user_input: dict | None = None) -> ConfigFlowResult:
         if user_input is not None:
             self._mode = None if user_input["mode"] == NEW_MODE else user_input["mode"]
             return await self.async_step_mode()
-        options = [{"value": NEW_MODE, "label": "Add new mode"},
+        options = [{"value": NEW_MODE, "label": "Add new mode"},  # label is the fallback for the translation
                    *({"value": m["id"], "label": m["name"]} for m in self._modes())]
         return self.async_show_form(step_id="modes", data_schema=vol.Schema(
-            {vol.Required("mode", default=NEW_MODE): _select(options)}))
+            {vol.Required("mode", default=NEW_MODE): _select(options, translation_key="mode_pick")}))
 
     async def async_step_mode(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         modes = self._modes()
         if user_input is not None:
             if user_input.get("delete"):
+                if dayparts := self._options.get(OPT_DAYPARTS):  # no daypart may keep pointing at it
+                    self._options[OPT_DAYPARTS] = {
+                        k: {**v, "mode": None} if k in PARTS and v.get("mode") == self._mode else v
+                        for k, v in dayparts.items()}
                 return self._set(OPT_MODES, [m for m in modes if m["id"] != self._mode])
-            mode = {"id": self._mode or catalog.slugify(user_input["name"]), "name": user_input["name"].strip(),
+            name = user_input["name"].strip()
+            mode = {"id": self._mode or catalog.slugify(name), "name": name,
                     "icon": user_input["icon"], "scene": user_input.get("scene") or None,
                     "flicker": user_input.get("flicker") or [], "lights_only": user_input.get("lights_only", False)}
-            if self._mode:
+            if not name or mode["id"] == "off":  # "off" is the ambience select's stop option
+                errors["name"] = "invalid_name"
+            elif self._mode:
                 return self._set(OPT_MODES, [mode if m["id"] == self._mode else m for m in modes])
-            if all(m["id"] != mode["id"] for m in modes):
+            elif all(m["id"] != mode["id"] for m in modes):
                 return self._set(OPT_MODES, [*modes, mode])
-            errors["name"] = "mode_exists"
+            else:
+                errors["name"] = "mode_exists"
         current = next((m for m in modes if m["id"] == self._mode), None)
         schema = MODE_SCHEMA.extend({vol.Optional("delete", default=False): BooleanSelector()}) if current else MODE_SCHEMA
         return self._form("mode", schema, user_input or current or {"icon": "mdi:lightbulb"}, errors)
@@ -512,10 +534,14 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
     async def async_step_assistant_auth(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         provider = self._pending["provider"]
+        current = self._section(OPT_ASSISTANT)
+        same = current if current.get("provider") == provider else {}  # never reuse a key across providers
         if user_input is not None:
-            url, key = user_input.get("url"), user_input.get("api_key")
+            url, key = user_input.get("url"), user_input.get("api_key") or same.get("api_key")
             if url is not None and not _url_ok(url):
                 errors["url"] = "invalid_url"
+            elif provider != "ollama" and not key:
+                errors["api_key"] = "api_key_required"
             else:
                 try:
                     await assistant.ensure_sdk(self.hass, provider)
@@ -525,10 +551,8 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
                 else:
                     self._pending.update(url=url, api_key=key)
                     return await self.async_step_assistant_model()
-        current = self._section(OPT_ASSISTANT)
-        schema = vol.Schema({vol.Required("url"): URL} if provider == "ollama" else {vol.Required("api_key"): PASSWORD})
-        return self._form("assistant_auth", schema, user_input or (
-            current if current.get("provider") == provider else {"url": OLLAMA_URL}), errors)
+        schema = vol.Schema({vol.Required("url"): URL} if provider == "ollama" else {vol.Optional("api_key"): PASSWORD})
+        return self._form("assistant_auth", schema, user_input or _public(same) or {"url": OLLAMA_URL}, errors)
 
     async def async_step_assistant_model(self, user_input: dict | None = None) -> ConfigFlowResult:
         if user_input is not None:
