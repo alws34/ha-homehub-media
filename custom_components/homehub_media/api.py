@@ -89,6 +89,7 @@ def _text(value: Any) -> str:
 _APP = vol.Match(r"^[A-Za-z0-9._-]{1,64}\Z")
 _TYPE_TARGET = vol.In(("tv", "pc", "keyboard"))
 _DELTA = vol.All(vol.Coerce(float), vol.Range(-500, 500))
+_MEDIA_ID = vol.Match(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")  # catalog.ID_RE
 _PCT = vol.All(vol.Coerce(float), vol.Range(0, 100))  # catalog.validate_composition rounds to int
 COMPOSITION = {  # types only; the ambience manager validates ids and the merged composition
     vol.Optional("visual"): vol.Any(None, cv.string), vol.Optional("visual_enabled"): cv.boolean,
@@ -121,18 +122,19 @@ SERVICES: dict[str, tuple[dict, Any]] = {
                      lambda hub, d: hub.activity.set(**d)),
     "channel": ({vol.Required("number"): vol.All(cv.string, vol.Match(r"^\d{1,4}\Z"))},
                 lambda hub, d: hub.channel(**d)),
-    "ambience_start": ({vol.Required("mode"): cv.slug}, lambda hub, d: hub.ambience.start(d["mode"])),
+    "ambience_start": ({vol.Required("mode"): cv.slug, vol.Optional("video"): _MEDIA_ID},
+                       lambda hub, d: hub.ambience.start(d["mode"], video=d.get("video"))),
     "ambience_stop": ({}, lambda hub, d: hub.ambience.stop()),
     "ambience_update": (COMPOSITION, lambda hub, d: hub.ambience.update(dict(d))),
     "save_mode": ({vol.Required("mode"): cv.slug, **COMPOSITION},
                   lambda hub, d: hub.ambience.save_mode(d["mode"], {k: v for k, v in d.items() if k != "mode"})),
     "set_mode_videos": ({vol.Required("mode"): cv.slug, vol.Required("videos"): vol.All(cv.ensure_list, [{
                             # Configure > Ambience lists the videos as name=link
-                            vol.Required("name"): vol.All(_text, vol.Match(r"[^=]+\Z", msg="a video name cannot contain =")),
+                            vol.Optional("name"): vol.All(_text, vol.Match(r"[^=]+\Z", msg="a video name cannot contain =")),
                             vol.Required("url"): _text}], vol.Length(max=50))},
                         lambda hub, d: hub.ambience.set_mode_videos(d["mode"], d["videos"])),
     "set_favorite": ({vol.Required("kind"): vol.In(("visual", "soundtrack")),
-                      vol.Required("media_id"): vol.Match(r"^[a-z0-9][a-z0-9_-]{0,63}\Z"),  # catalog.ID_RE
+                      vol.Required("media_id"): _MEDIA_ID,
                       vol.Required("favorite"): cv.boolean}, lambda hub, d: hub.ambience.set_favorite(**d)),
     "ambience_auto": ({}, lambda hub, d: hub.ambience.auto_start()),
     "ambience_sleep_timer": ({vol.Required("minutes"): vol.All(vol.Coerce(int), vol.Range(0, 600))},

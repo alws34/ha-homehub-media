@@ -607,6 +607,10 @@
         "mode": {
           "name": "Mode",
           "description": "ID of the ambience mode, for example fireplace."
+        },
+        "video": {
+          "name": "Video",
+          "description": "ID of a visual from the catalog to play instead of the mode's own pick."
         }
       }
     },
@@ -720,7 +724,7 @@
         },
         "videos": {
           "name": "Videos",
-          "description": "List of videos, each with a name and a url (a YouTube link or 11-character video ID). An empty list leaves the mode without visuals."
+          "description": "List of videos, each with a url (a YouTube link or 11-character video ID) and an optional name (the video's YouTube title when left out). An empty list leaves the mode without visuals."
         }
       }
     },

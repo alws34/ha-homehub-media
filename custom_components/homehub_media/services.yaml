@@ -116,6 +116,10 @@ ambience_start:
       example: fireplace
       selector:
         text:
+    video:
+      example: fireplace
+      selector:
+        text:
 ambience_stop:
 ambience_update:
   fields: &composition

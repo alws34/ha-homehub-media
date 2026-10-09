@@ -34,6 +34,20 @@ const BRANDS = {
   twitch: ["#9146ff", "#fff"],
   paramount_plus: ["#0064ff", "#fff"],
 };
+// app logos: Simple Icons 13.21.0 path data (CC0; trademarks belong to their owners), drawn in the tile's text colour.
+// Disney+ and Max are not in Simple Icons: they get a wordmark; the browser a generic icon.
+const LOGOS = {
+  netflix: "M5.398 0v.006c3.028 8.556 5.37 15.175 8.348 23.596 2.344.058 4.85.398 4.854.398-2.8-7.924-5.923-16.747-8.487-24zm8.489 0v9.63L18.6 22.951c-.043-7.86-.004-15.913.002-22.95zM5.398 1.05V24c1.873-.225 2.81-.312 4.715-.398v-9.22z",
+  youtube: "M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z",
+  prime_video: "M0 9.508c0-.043.01-.073.028-.09.018-.017.047-.025.086-.025h.329c.07 0 .112.034.127.101l.032.119c.091-.088.202-.159.33-.21a1.04 1.04 0 0 1 .396-.079c.294 0 .528.109.7.326.171.217.257.51.257.88 0 .254-.042.475-.127.665-.086.19-.201.335-.347.437a.85.85 0 0 1-.502.154c-.125 0-.243-.02-.355-.06a.857.857 0 0 1-.288-.164v1.003c0 .043-.008.073-.025.09-.017.016-.046.025-.09.025H.115c-.04 0-.068-.009-.086-.025-.019-.017-.028-.047-.028-.09zm1.113.32a.868.868 0 0 0-.447.124v1.206a.834.834 0 0 0 .447.124c.17 0 .296-.058.376-.174.081-.117.121-.3.121-.55 0-.254-.04-.439-.118-.555-.08-.116-.206-.174-.379-.174zm2.248-.087c.121-.134.236-.23.344-.286a.733.733 0 0 1 .345-.085h.063c.043 0 .073.009.092.025.018.017.027.047.027.09v.385c0 .04-.008.068-.025.087-.017.018-.046.027-.089.027a.923.923 0 0 1-.082-.004 1.369 1.369 0 0 0-.383.025c-.1.02-.186.045-.256.076v1.54c0 .04-.008.069-.025.087-.016.018-.046.028-.089.028h-.437c-.04 0-.069-.01-.087-.028-.018-.018-.028-.047-.028-.087V9.508c0-.043.01-.073.028-.09.018-.017.047-.025.087-.025h.328c.07 0 .112.034.128.1zm1.526-.71a.396.396 0 0 1-.278-.096.338.338 0 0 1-.105-.262c0-.11.035-.197.105-.26a.395.395 0 0 1 .278-.097c.116 0 .208.032.278.096.07.064.105.151.105.261a.34.34 0 0 1-.105.262.396.396 0 0 1-.278.096zm-.333.477c0-.043.01-.073.027-.09.019-.017.048-.025.087-.025h.438c.043 0 .072.008.089.025s.025.047.025.09v2.113c0 .04-.008.069-.025.087-.017.018-.046.028-.09.028h-.437c-.04 0-.068-.01-.087-.028-.018-.018-.027-.047-.027-.087zm1.837.11c.161-.107.306-.183.435-.227.13-.045.263-.067.4-.067.273 0 .466.098.579.294.155-.104.3-.18.438-.225.137-.046.278-.069.424-.069.213 0 .377.06.495.179.117.12.175.286.175.5v1.618c0 .04-.008.069-.025.087-.017.019-.046.027-.089.027h-.438c-.04 0-.068-.008-.086-.027-.018-.018-.028-.047-.028-.087V10.15c0-.208-.092-.312-.278-.312-.164 0-.33.04-.497.119v1.664c0 .04-.008.069-.025.087-.017.019-.046.027-.09.027h-.437c-.04 0-.068-.008-.086-.027-.019-.018-.028-.047-.028-.087V10.15c0-.208-.093-.312-.278-.312-.17 0-.337.04-.502.123v1.66c0 .04-.008.069-.025.087-.017.019-.046.027-.089.027h-.438c-.039 0-.068-.008-.086-.027-.018-.018-.027-.047-.027-.087V9.508c0-.043.009-.073.027-.09.018-.017.047-.025.086-.025h.329c.07 0 .112.034.128.101zm4.387 1.16a1.81 1.81 0 0 1-.451-.05c.018.204.08.35.185.44.105.088.263.132.476.132.085 0 .168-.005.249-.016a3.08 3.08 0 0 0 .362-.078.143.143 0 0 1 .023-.002c.052 0 .078.035.078.105v.211c0 .049-.007.083-.02.103a.169.169 0 0 1-.08.053 1.953 1.953 0 0 1-.708.128c-.377 0-.666-.103-.868-.312-.203-.207-.304-.505-.304-.893 0-.398.104-.71.31-.935.207-.227.494-.34.862-.34.283 0 .504.069.664.206a.69.69 0 0 1 .24.55c0 .23-.087.403-.258.52-.172.119-.425.177-.76.177zm.064-.99c-.292 0-.46.18-.506.54.122.025.257.037.406.037.155 0 .267-.024.337-.071.07-.047.105-.12.105-.218 0-.193-.114-.289-.342-.289zm2.948 1.946a.21.21 0 0 1-.075-.011.119.119 0 0 1-.05-.037.274.274 0 0 1-.038-.071l-.777-2.04a1.863 1.863 0 0 1-.023-.063.162.162 0 0 1-.009-.05c0-.047.03-.07.091-.07h.454c.049 0 .084.01.107.028.023.018.04.049.052.092l.468 1.622.477-1.622a.175.175 0 0 1 .052-.092c.023-.018.058-.027.107-.027h.44c.061 0 .091.022.091.068a.16.16 0 0 1-.009.05l-.022.065-.777 2.039a.274.274 0 0 1-.039.07.122.122 0 0 1-.047.038.207.207 0 0 1-.078.01zm2.02-2.703a.393.393 0 0 1-.277-.097.338.338 0 0 1-.105-.26c0-.11.035-.198.105-.262a.393.393 0 0 1 .277-.096c.115 0 .207.032.277.096.07.064.104.151.104.261 0 .11-.034.197-.104.261a.393.393 0 0 1-.277.097zm-.218 2.703c-.04 0-.068-.01-.086-.028-.019-.018-.028-.047-.028-.087V9.507c0-.043.01-.072.028-.09.018-.016.047-.024.086-.024h.436c.042 0 .072.008.089.025.016.017.024.046.024.09v2.111c0 .04-.008.07-.024.087-.017.019-.047.028-.09.028zm1.948.05a.869.869 0 0 1-.513-.153.97.97 0 0 1-.334-.426 1.6 1.6 0 0 1-.116-.63c0-.38.09-.682.268-.91a.856.856 0 0 1 .709-.341.98.98 0 0 1 .622.206V8.458c0-.043.01-.073.027-.09.018-.016.047-.025.087-.025h.436c.042 0 .071.009.088.025.017.017.025.047.025.09v3.161c0 .04-.008.07-.025.087-.017.019-.046.028-.088.028h-.364a.135.135 0 0 1-.084-.023.137.137 0 0 1-.043-.078l-.027-.105a.958.958 0 0 1-.668.256zm.218-.504a.762.762 0 0 0 .418-.128v-1.21a.872.872 0 0 0-.45-.114c-.16 0-.28.06-.358.18-.08.121-.118.304-.118.548 0 .245.041.426.124.546.084.119.212.178.384.178zm2.588-.51c-.169 0-.315-.016-.44-.05.018.201.078.345.18.432.103.087.257.13.465.13.083 0 .164-.005.242-.016a2.997 2.997 0 0 0 .354-.076.135.135 0 0 1 .022-.002c.05 0 .075.035.075.103v.207c0 .048-.007.082-.02.101a.165.165 0 0 1-.077.052 1.895 1.895 0 0 1-.69.126c-.367 0-.65-.102-.846-.306-.197-.204-.296-.496-.296-.876 0-.39.1-.695.302-.917.202-.222.482-.333.84-.333.276 0 .492.068.647.203a.678.678 0 0 1 .234.539c0 .225-.084.395-.251.51-.168.115-.415.173-.74.173zm.063-.97c-.285 0-.45.176-.494.53.119.024.25.036.396.036.15 0 .26-.024.329-.07.068-.046.102-.117.102-.213 0-.19-.111-.284-.333-.284zm2.442 2.003c-.36 0-.642-.11-.845-.328-.203-.218-.304-.523-.304-.914 0-.388.101-.691.304-.91.203-.218.485-.327.845-.327s.642.109.845.327c.203.219.304.522.304.91 0 .39-.101.696-.304.914-.203.218-.485.328-.845.328zm0-.514c.318 0 .477-.242.477-.728 0-.483-.16-.724-.477-.724-.318 0-.477.241-.477.724 0 .486.16.728.477.728zm-6.844 1.886c.405-.306.944-.408 1.39-.408.418 0 .756.09.828.185.15.2-.039 1.584-.775 2.244-.112.102-.22.047-.17-.087.166-.442.536-1.436.36-1.677-.175-.242-1.158-.115-1.6-.058-.068.008-.107-.02-.112-.061v-.023c.004-.036.03-.078.079-.115zm-10.184-.172a.105.105 0 0 1 .106-.091c.027 0 .057.009.089.028a11.778 11.778 0 0 0 6.194 1.772c1.52 0 3.19-.34 4.726-1.043.232-.105.426.164.2.346-1.371 1.09-3.359 1.67-5.07 1.67-2.397 0-4.557-.956-6.191-2.547a.173.173 0 0 1-.054-.097Z",
+  apple_tv: "M20.57 17.735h-1.815l-3.34-9.203h1.633l2.02 5.987c.075.231.273.9.586 2.012l.297-.997.33-1.006 2.094-6.004H24zm-5.344-.066a5.76 5.76 0 0 1-1.55.207c-1.23 0-1.84-.693-1.84-2.087V9.646h-1.063V8.532h1.121V7.081l1.476-.602v2.062h1.707v1.113H13.38v5.805c0 .446.074.75.214.932.14.182.396.264.75.264.207 0 .495-.041.883-.115zm-7.29-5.343c.017 1.764 1.55 2.358 1.567 2.366-.017.042-.248.842-.808 1.658-.487.71-.99 1.418-1.79 1.435-.783.016-1.03-.462-1.93-.462-.89 0-1.17.445-1.913.478-.758.025-1.344-.775-1.838-1.484-.998-1.451-1.765-4.098-.734-5.88.51-.89 1.426-1.451 2.416-1.46.75-.016 1.468.512 1.93.512.461 0 1.327-.627 2.234-.536.38.016 1.452.157 2.136 1.154-.058.033-1.278.743-1.27 2.219M6.468 7.988c.404-.495.685-1.18.61-1.864-.585.025-1.294.388-1.723.883-.38.437-.71 1.138-.619 1.806.652.05 1.328-.338 1.732-.825Z",
+  plex: "M3.987 8.409c-.96 0-1.587.28-2.12.933v-.72H0v8.88s.038.018.127.037c.138.03.821.187 1.331-.249.441-.377.542-.814.542-1.318v-1.283c.533.573 1.147.813 2 .813 1.84 0 3.253-1.493 3.253-3.48 0-2.12-1.36-3.613-3.266-3.613Zm16.748 5.595.406.591c.391.614.894.906 1.492.908.621-.012 1.064-.562 1.226-.755 0 0-.307-.27-.686-.72-.517-.614-1.214-1.755-1.24-1.803l-1.198 1.779Zm-3.205-1.955c0-2.08-1.52-3.64-3.52-3.64s-3.467 1.587-3.467 3.573a3.48 3.48 0 0 0 3.507 3.52c1.413 0 2.626-.84 3.253-2.293h-2.04l-.093.093c-.427.4-.72.533-1.227.533-.787 0-1.373-.506-1.453-1.266h4.986c.04-.214.054-.307.054-.52Zm-7.671-.219c0 .769.11 1.701.868 2.722l.056.069c-.306.526-.742.88-1.248.88-.399 0-.814-.211-1.138-.579a2.177 2.177 0 0 1-.538-1.441V6.409H9.86l-.001 5.421Zm9.283 3.46h-2.39l2.247-3.332-2.247-3.335h2.39l2.248 3.335-2.248 3.332Zm1.593-1.286Zm-17.162-.342c-.933 0-1.68-.773-1.68-1.72s.76-1.666 1.68-1.666c.92 0 1.68.733 1.68 1.68 0 .946-.733 1.706-1.68 1.706Zm18.361-1.974L24 8.622h-2.391l-.87 1.293 1.195 1.773Zm-9.404-.466c.16-.706.72-1.133 1.493-1.133.773 0 1.373.467 1.507 1.133h-3Z",
+  jellyfin: "M12 .002C8.826.002-1.398 18.537.16 21.666c1.56 3.129 22.14 3.094 23.682 0C25.384 18.573 15.177 0 12 0zm7.76 18.949c-1.008 2.028-14.493 2.05-15.514 0C3.224 16.9 9.92 4.755 12.003 4.755c2.081 0 8.77 12.166 7.759 14.196zM12 9.198c-1.054 0-4.446 6.15-3.93 7.189.518 1.04 7.348 1.027 7.86 0 .511-1.027-2.874-7.19-3.93-7.19z",
+  spotify: "M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z",
+  twitch: "M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z",
+  paramount_plus: "M16.347 21.373c.057-.084.151-.314-.025-.74l-.53-1.428c-.073-.182.084-.293.19-.173 0 0 1.004 1.157 1.264 1.64l.495.822c.425.028 1.6.06 2.732.06a3.26 3.26 0 0 1-.316-.364c-1.93-2.392-3.154-3.724-3.166-3.737-.391-.426-.572-.508-.87-.643a4.82 4.82 0 0 1-.138-.065v.364c0 .047-.057.073-.086.022l-2.846-5.001a1.598 1.598 0 0 0-.508-.587l-.277-.194-1.354 3.123c.212 0 .354.216.27.409l-1.25 2.893h1.147c.443 0 .883.087 1.294.255l.302.125s-.913 1.878-.913 2.867c0 .181.028.362.075.534h2.104l-.096-.595s1.266.294 2.502.413M12 2.437c-6.627 0-12 5.373-12 12 0 2.669.873 5.133 2.346 7.126.503-.218.783-.542.983-.791l2.234-2.858a.467.467 0 0 1 .179-.138l.336-.146 3.674-4.659.534-.417 1.094-1.524a.482.482 0 0 1 .101-.102l.478-.347a.34.34 0 0 1 .398-.004l.578.407c.308.216.557.504.726.84l2.322 4.077c.051.09.09.129.182.174.454.227.732.268 1.33.913.277.304 1.495 1.666 3.203 3.784.236.318.538.588.963.783A11.948 11.948 0 0 0 24 14.437c0-6.627-5.373-12-12-12M3.236 15.1l-.778-.253-.48.662v-.818l-.778-.253.778-.253v-.818l.48.662.778-.253-.48.662Zm-.185 2.676-.252.778-.253-.778h-.818l.661-.481-.253-.777.663.48.66-.48-.252.777.662.481Zm.156-6.195.253.778-.661-.48-.663.48.253-.778-.66-.48h.817l.253-.778.252.777h.818Zm1.314-1.76L4.04 9.16l-.778.253.48-.661-.48-.663.778.254.48-.662v.818l.778.253-.777.252Zm2.045-2.862-.253.777-.252-.777h-.818l.662-.48-.253-.778.661.48.661-.48-.252.777.662.48Zm2.577-1.313-.48.661V5.49l-.779-.254.778-.253v-.817l.48.66.78-.253-.481.663.48.66zm3.265-.75.253.778-.661-.48-.662.48.252-.777-.66-.481h.818L12 3.637l.252.778h.818zm2.93.595v.816l-.481-.661-.777.252.48-.662-.48-.662.777.253.48-.66v.817l.779.252zm5.426 8.285.778.253.48-.662v.818l.778.253-.778.253v.818l-.48-.662-.778.253.48-.662zm-3.077-6.04-.253-.777h-.818l.662-.48-.253-.778.662.48.662-.48-.254.778.662.48h-.818zm1.792 2.086v-.818l-.777-.252.777-.253V7.68l.481.662.777-.254-.48.663.48.66-.777-.252zm1.469 1.278.253-.777.254.777h.816l-.66.481.252.778-.662-.48-.661.48.253-.778-.662-.48zm.506 6.676-.253.778-.253-.778h-.817l.662-.481-.253-.777.66.48.663-.48-.253.777.661.481zm-12.08-.615.76-1.588c.024-.048-.032-.108-.067-.067l-.664.668c-.313.329-.847 1.25-.95 1.421l-.808 1.335a.109.109 0 0 1 .1.162l-.739 1.238c-.18.309.145.523.189.452 1.157-1.868 1.832-1.719 1.832-1.719l.387-.897c.022-.047-.001-.1-.05-.12-.12-.05-.316-.27.01-.885z",
+};
+const WORDMARKS = { disney_plus: "font-family:Georgia,serif;font-style:italic", max: "text-transform:lowercase;letter-spacing:-.04em" };
 const COMP_DEFAULTS = {
   visual: null, visual_enabled: false, video_loop: true, video_random_start: true, original_volume: 20,
   soundtrack: null, soundtrack_loop: true, soundtrack_random_start: true, soundtrack_volume: 100, visuals: [],
@@ -45,17 +59,17 @@ const toggleIn = (list, id) => {
   if (l.includes(id)) return l.filter((x) => x !== id);
   return l.length < VISUALS_MAX ? [...l, id] : l;
 };
-// the mode's YouTube videos as editor rows: its visual and rotation, in order, that are YouTube visuals
-const modeVideos = (comp, visuals) => [...new Set([comp?.visual, ...(comp?.visuals || [])])]
+// a mode's videos in order: its random rotation, else its one visual (the one playing is not always the first)
+const modeIds = (comp) => (comp?.visuals?.length ? comp.visuals : comp?.visual ? [comp.visual] : []);
+const nextId = (ids, cur) => ids[(ids.indexOf(cur) + 1) % ids.length];
+// the mode's YouTube videos as editor rows; set_mode_videos takes back the name (a YouTube visual's title) and link
+const modeVideos = (comp, visuals) => modeIds(comp)
   .map((id) => visuals?.find((v) => v.id === id && v.source_type === "youtube")).filter(Boolean)
-  .map((v) => ({ name: v.title, url: v.link, preview: v.preview }));
-// their ids once saved: a YouTube visual's title is its (unique) name
-const videoIds = (rows, visuals) => rows
-  .map((r) => visuals?.find((v) => v.source_type === "youtube" && v.title === r.name.trim())?.id).filter(Boolean);
+  .map((v) => ({ id: v.id, name: v.title, url: v.link, preview: v.preview }));
 const randomLabel = (comp) => (comp?.visuals?.length >= 2 ? `Random from ${comp.visuals.length} videos` : "");
 // the TV volume is known only with the TV media player, which set_volume needs: no level, no slider
 const volumeSlider = (level) => (level == null ? ""
-  : `${icon("mdi:volume-medium")}<input type="range" min="0" max="100" step="1" data-volume aria-label="TV volume">`);
+  : `<input type="range" min="0" max="100" step="1" data-volume aria-label="TV volume"><output data-vol></output>`);
 const ARROWS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -246,10 +260,10 @@ class HomeHubMediaCard extends HTMLElement {
     this._render();
   }
 
-  async _call(service, data = {}) {
+  async _call(service, data = {}, domain = DOMAIN) {
     if (!this._hass) return false;
     try {
-      await this._hass.callService(DOMAIN, service, data);
+      await this._hass.callService(domain, service, data);
       return true;
     } catch (err) {
       this._toast(err?.message || `${pretty(service)} failed`);
@@ -257,12 +271,12 @@ class HomeHubMediaCard extends HTMLElement {
     }
   }
 
-  _toast(message) {
+  _toast(message, action) {
     const now = Date.now();
     if (message === this._lastToast && now - this._lastToastAt < 3000) return;  // no spam from pointer batches
     this._lastToast = message;
     this._lastToastAt = now;
-    this.dispatchEvent(new CustomEvent("hass-notification", { detail: { message }, bubbles: true, composed: true }));
+    this.dispatchEvent(new CustomEvent("hass-notification", { detail: action ? { message, action } : { message }, bubbles: true, composed: true }));
   }
 
   // ---------- state helpers ----------
@@ -329,7 +343,16 @@ class HomeHubMediaCard extends HTMLElement {
     const s = JSON.stringify(slice);
     if (this._slices[key] === s) return false;
     this._slices[key] = s;
+    // typed text survives a re-render: [data-keep] fields get their value, focus and caret back
+    const f = this.shadowRoot.activeElement;
+    const kept = [...el.querySelectorAll("[data-keep]")].map((n) => [n.dataset.keep, n.value, n === f && [n.selectionStart, n.selectionEnd]]);
     el.innerHTML = html();
+    for (const [k, value, sel] of kept) {
+      const n = el.querySelector(`[data-keep="${k}"]`);
+      if (!n) continue;
+      n.value = value;
+      if (sel) { n.focus(); n.setSelectionRange(...sel); }
+    }
     return true;
   }
 
@@ -389,7 +412,7 @@ class HomeHubMediaCard extends HTMLElement {
 
   _bodyHtml() {
     if (!this._snap) return this._fatal ? "" : `<div class="skel"></div><div class="skel short"></div>`;
-    if (this._tab === "ambience") return `<div data-s="amberr"></div><div data-s="ambmain"></div><div data-s="sleep"></div>`;
+    if (this._tab === "ambience") return `<div data-s="amberr"></div><div data-s="hero"></div><div data-s="sleep"></div><div class="ambmain" data-s="ambmain"></div>`;
     if (this._tab === "library") return `<div class="lib" data-s="lib"></div>`;
     return `<div class="remote">
       <div class="col">
@@ -403,7 +426,6 @@ class HomeHubMediaCard extends HTMLElement {
         <div class="pad" data-s="pad"></div>
         <div data-s="padhint"></div>
         <div class="ctl" data-s="ctl"></div>
-        <div class="volrow" data-s="vol"></div>
       </div>
       <div class="col">
         <div data-s="apps"></div>
@@ -411,7 +433,8 @@ class HomeHubMediaCard extends HTMLElement {
           <div class="kbd">${icon("mdi:keyboard-outline")}
             <input data-kbdin type="text" maxlength="200" enterkeyhint="send" autocomplete="off" autocorrect="off"
               autocapitalize="off" spellcheck="false" aria-label="Type text">
-            <button class="ib" data-a="kclear" aria-label="Clear text">${icon("mdi:close")}</button>
+            <button class="ib flat" data-a="kclear" aria-label="Clear text">${icon("mdi:close")}</button>
+            <button class="btn sm primary" data-a="ksend">Send</button>
           </div>
           <div data-s="kbdhint"></div>
         </div>
@@ -477,11 +500,10 @@ class HomeHubMediaCard extends HTMLElement {
     const padHint = tp && t === "tv"
       ? (s.tv?.pointer_active ? "Pointer mode: drag to move · tap to click" : "Swipe to move · tap for OK") : "";
     this._sec("padhint", [padHint], () => (padHint ? hint(padHint, "mdi:gesture-swipe") : ""));
-    this._sec("ctl", [!!s.tv?.muted, tp, canTouch], () => this._ctlHtml(!!s.tv?.muted, tp, canTouch));
-    const vol = this.shadowRoot.querySelector("[data-vol]");
-    if (vol) vol.textContent = s.tv?.volume ?? "–";
     const level = s.tv?.volume;
-    this._sec("vol", [level != null], () => volumeSlider(level));
+    this._sec("ctl", [!!s.tv?.muted, tp, canTouch, level != null], () => this._ctlHtml(!!s.tv?.muted, tp, canTouch, level));
+    const vol = this.shadowRoot.querySelector("[data-vol]");
+    if (vol) vol.textContent = level ?? "–";
     const slider = this.shadowRoot.querySelector("[data-volume]");
     if (slider && level != null && !this._volTimer && Date.now() - (this._volAt || 0) > 1500) {  // never fight a drag
       slider.value = level;
@@ -492,8 +514,11 @@ class HomeHubMediaCard extends HTMLElement {
     this._sec("apps", [apps, s.tv?.app], () => (apps.length ? `<h3 class="sh">Apps</h3><div class="apps">${apps.map((a) => {
       const [bg, fg] = BRANDS[a.key] || [];
       const on = a.key === s.tv?.app;
+      const cap = `<span class="cap">${esc(a.name)}</span>`;
+      const art = LOGOS[a.key] ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${LOGOS[a.key]}"/></svg>${cap}`
+        : a.key === "browser" ? `${icon("mdi:web")}${cap}` : `<span class="wm" style="${WORDMARKS[a.key] || ""}">${esc(a.name)}</span>`;
       return `<button class="app${on ? " on" : ""}"${bg ? ` style="--b:${bg};--f:${fg}"` : ""} data-a="app" data-v="${esc(a.key)}" data-hold="restart"
-        aria-label="${esc(a.name)}${on ? ", open now" : ""}. Long-press to restart">${esc(a.name)}</button>`;
+        aria-label="${esc(a.name)}${on ? ", open now" : ""}. Long-press to restart">${art}</button>`;
     }).join("")}</div>` : ""));
 
     const kbd = this.shadowRoot.querySelector("[data-kbd]");
@@ -501,8 +526,9 @@ class HomeHubMediaCard extends HTMLElement {
       kbd.hidden = t === "box" && !tg.keyboard;
       kbd.querySelector("input").placeholder = `Type on the ${TARGETS[t][1]}`;
     }
-    const imeHint = t === "tv" && !s.tv?.keyboard_active && !tg.keyboard;
-    this._sec("kbdhint", [imeHint], () => (imeHint ? hint("Focus a search box on the TV first") : ""));
+    const imeHint = t === "tv" && !tg.keyboard;
+    this._sec("kbdhint", [imeHint], () => (imeHint
+      ? hint("Works in the TV's own search and browser. YouTube and Netflix need the Bluetooth keyboard bridge.") : ""));
     this._sec("extra", [t, t === "pc" ? s.pc : null], () => (t === "box" ? this._boxHtml() : t === "pc" ? this._pcHtml() : ""));
   }
 
@@ -527,14 +553,20 @@ class HomeHubMediaCard extends HTMLElement {
       </div>`;
   }
 
-  _ctlHtml(muted, tp, canTouch) {
-    return `<div class="rocker" role="group" aria-label="Volume">
-        <button data-a="remote" data-v="volume_down" data-hold="repeat" aria-label="Volume down">${icon("mdi:minus")}</button>
-        <button class="mute${muted ? " on" : ""}" data-a="remote" data-v="mute" aria-pressed="${muted}" aria-label="Mute">${icon(muted ? "mdi:volume-off" : "mdi:volume-high")}<span data-vol></span></button>
-        <button data-a="remote" data-v="volume_up" data-hold="repeat" aria-label="Volume up">${icon("mdi:plus")}</button>
-      </div>
-      <button class="ib" data-a="remote" data-v="play_pause" aria-label="Play or pause">${icon("mdi:play-pause")}</button>
+  // with the TV media player: mute, slider and level; without it (no level known): the volume rocker
+  _ctlHtml(muted, tp, canTouch, level) {
+    const muteIc = icon(muted ? "mdi:volume-off" : "mdi:volume-high");
+    const more = `<button class="ib" data-a="remote" data-v="play_pause" aria-label="Play or pause">${icon("mdi:play-pause")}</button>
       ${canTouch ? `<button class="ib${tp ? " on" : ""}" data-a="touchpad" aria-pressed="${tp}" aria-label="Touchpad">${icon("mdi:gesture-tap-hold")}</button>` : ""}`;
+    if (level != null) {
+      return `<div class="volrow"><button class="ib mute${muted ? " on" : ""}" data-a="remote" data-v="mute" aria-pressed="${muted}" aria-label="Mute">${muteIc}</button>${volumeSlider(level)}</div>
+        <div class="row center">${more}</div>`;
+    }
+    return `<div class="row center"><div class="rocker" role="group" aria-label="Volume">
+        <button data-a="remote" data-v="volume_down" data-hold="repeat" aria-label="Volume down">${icon("mdi:minus")}</button>
+        <button class="mute${muted ? " on" : ""}" data-a="remote" data-v="mute" aria-pressed="${muted}" aria-label="Mute">${muteIc}<span data-vol></span></button>
+        <button data-a="remote" data-v="volume_up" data-hold="repeat" aria-label="Volume up">${icon("mdi:plus")}</button>
+      </div>${more}</div>`;
   }
 
   _boxHtml() {
@@ -714,56 +746,96 @@ class HomeHubMediaCard extends HTMLElement {
 
   // ---------- ambience tab ----------
 
+  _visual(id) {
+    return id ? this._catalog?.visuals?.find((v) => v.id === id) : undefined;
+  }
+
+  // the mode's YouTube videos: the optimistic list while a change saves, else the saved one
+  _rows(id) {
+    return this._vsave?.id === id ? this._vsave.rows : modeVideos(this._snap.ambience?.compositions?.[id], this._catalog?.visuals);
+  }
+
   _ambSlice() {
     const a = this._snap.ambience || {};
-    if (!this._edit) return ["grid", a.mode, a.modes, a.auto, a.daypart_mode, (a.modes || []).map((m) => randomLabel(a.compositions?.[m.id]))];
-    return ["edit", this._edit.id, this._edit.draft, this._edit.videos, this._browse, this._catVer, this._catalogErr,
-      a.mode === this._edit.id, a.modes, this._refreshing];
+    const common = [a.mode, a.visual, a.modes, a.compositions, this._catVer, this._vsave];
+    if (!this._edit) return ["grid", ...common, a.auto, a.daypart_mode];
+    const ed = this._edit;
+    return ["edit", ...common, ed.id, ed.draft, ed.sheet, this._browse, this._catalogErr, a.backend, this._refreshing];
   }
 
   _renderAmbience() {
     const a = this._snap.ambience || {};
-    const ed = this._edit;
-    if (ed && !ed.videos && this._catalog) {
-      ed.videos = modeVideos(ed.draft, this._catalog.visuals);
-      ed.videosSaved = JSON.stringify(ed.videos);
-    }
+    const on = !this._edit && !!a.mode && a.mode !== "off";
     this._sec("amberr", [a.error], () => (a.error ? banner(a.error) : ""));
-    this._sec("ambmain", this._ambSlice(), () => (this._edit ? this._editorHtml() : this._modesHtml()));
-    const until = a.sleep_until ? new Date(a.sleep_until).getTime() : null;
+    this._sec("hero", on ? [a.mode, a.visual, a.modes, a.compositions?.[a.mode], this._catVer] : [!this._edit], () => {
+      if (on) return this._heroHtml();
+      return this._edit ? "" : `<div class="idle">Nothing playing. Tap a mode to start it on the TV.</div>`;
+    });
+    const until = on && a.sleep_until ? new Date(a.sleep_until).getTime() : null;
     const mins = until ? Math.max(0, Math.ceil((until - Date.now()) / 60000)) : null;
-    this._sec("sleep", [mins], () => `<h3 class="sh">${icon("mdi:power-sleep")}Sleep timer${mins != null ? `<span class="note">Off in ${fmtMins(mins)}</span>` : ""}</h3>
-      <div class="chips">
-        ${[15, 30, 60, 90].map((m) => `<button class="chip" data-a="sleep" data-v="${m}" aria-label="Sleep in ${m} minutes">${m} min</button>`).join("")}
-        ${mins != null ? `<button class="chip" data-a="sleep" data-v="0">${icon("mdi:close")}Cancel</button>` : ""}
-      </div>`);
+    this._sec("sleep", [on, mins], () => (!on ? "" : `<div class="sleep">
+        <h3 class="sh">${icon("mdi:power-sleep")}Sleep timer${mins != null
+          ? `<span class="note">Off in ${fmtMins(mins)}</span><button class="ib flat sm" data-a="sleep" data-v="0" aria-label="Cancel the sleep timer">${icon("mdi:close")}</button>` : ""}</h3>
+        <div class="slchips">${[15, 30, 60, 90].map((m) => `<button class="chip sm" data-a="sleep" data-v="${m}" aria-label="Sleep in ${m} minutes">${m} min</button>`).join("")}</div>
+      </div>`));
+    this._sec("ambmain", this._ambSlice(), () => (this._edit ? this._editorHtml() : this._modesHtml()));
+  }
+
+  _heroHtml() {
+    const a = this._snap.ambience;
+    const m = a.modes?.find((x) => x.id === a.mode) || { id: a.mode, name: pretty(a.mode) };
+    const ids = m.lights_only ? [] : modeIds(a.compositions?.[a.mode]);
+    const i = ids.indexOf(a.visual);
+    const v = this._visual(a.visual);
+    return `<div class="hero">
+      <span class="ph">${icon(m.icon || "mdi:lightbulb-group")}</span>${img(v?.preview)}
+      <div class="over">
+        <div class="top"><span class="live">${m.lights_only ? "Lights on" : "On the TV"}</span><span>${i >= 0 ? `${i + 1} of ${ids.length} · loops` : a.visual ? "loops" : ""}</span></div>
+        <div>
+          <b class="hn">${esc(m.name)}</b><small>${esc(v?.title || (m.lights_only ? "Lights only" : ""))}</small>
+          <div class="acts">
+            <button class="hb primary" data-a="amb_stop">${icon("mdi:stop")}Stop</button>
+            ${ids.length >= 2 ? `<button class="hb" data-a="next" data-v="${esc(nextId(ids, a.visual))}">${icon("mdi:skip-next")}Next video</button>` : ""}
+            ${m.lights_only ? "" : `<button class="hb" data-a="edit" data-v="${esc(m.id)}" aria-label="Videos of ${esc(m.name)}">${icon("mdi:pencil")}Videos</button>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
   }
 
   _modesHtml() {
     const a = this._snap.ambience || {};
-    const modes = a.modes || [];
-    const dp = modes.find((m) => m.id === a.daypart_mode);
-    const badge = `<span class="badge">ON</span>`;
-    const tile = (on, act, id, ic, name, sub, gear) => `<div class="mode${on ? " on" : ""}">
-        <button class="mt" data-a="${act}"${id ? ` data-v="${esc(id)}"` : ""} aria-pressed="${on}">
-          <span class="mi">${icon(ic)}</span>
-          <span class="mx"><b>${esc(name)}</b><small>${on ? badge : ""}${esc(sub)}</small></span>
-        </button>
-        ${gear ? `<button class="gear" data-a="edit" data-v="${esc(id)}" aria-label="Edit ${esc(name)}">${icon("mdi:tune-variant")}</button>` : ""}
+    const dp = a.modes?.find((m) => m.id === a.daypart_mode);
+    return `<h3 class="sh">Modes</h3>
+      <div class="modes">${(a.modes || []).map((m) => {
+        const on = a.mode === m.id;
+        const n = m.lights_only ? 0 : modeIds(a.compositions?.[m.id]).length;
+        const sub = m.lights_only ? "Lights only" : n ? `${n} video${n === 1 ? "" : "s"}` : "No videos";
+        return `<div class="mode${on ? " on" : ""}">
+          <button class="mt" data-a="mode" data-v="${esc(m.id)}" aria-pressed="${on}" aria-label="Start ${esc(m.name)}${on ? ", playing" : ""}">
+            <span class="ph">${icon(m.icon || "mdi:lightbulb-group")}</span>${n ? img(this._visual(modeIds(a.compositions[m.id])[0])?.preview) : ""}
+            <span class="lab"><b>${esc(m.name)}</b><small>${on ? "▶ Playing · " : ""}${esc(sub)}</small></span>
+          </button>
+          ${m.lights_only ? "" : `<button class="edit" data-a="edit" data-v="${esc(m.id)}" aria-label="Edit ${esc(m.name)}">${icon("mdi:pencil")}</button>`}
+        </div>`;
+      }).join("")}</div>
+      <div class="auto">
+        <span class="ax"><b>Auto ambience${dp ? `<span> · now ${esc(dp.name)}</span>` : ""}</b><small>Starts a mode by time of day when the TV is idle</small></span>
+        <button class="sw" role="switch" aria-checked="${!!a.auto}" data-a="auto" aria-label="Auto ambience"></button>
       </div>`;
-    return `<h3 class="sh">Modes${a.mode && a.mode !== "off" ? `<button class="chip sm" data-a="amb_stop">${icon("mdi:stop")}Stop</button>` : ""}</h3>
-      <div class="modes">
-        ${tile(!!a.auto, "auto", null, "mdi:auto-fix", "Auto", dp ? dp.name : "Nothing scheduled")}
-        ${modes.map((m) => tile(a.mode === m.id, "mode", m.id, m.icon || "mdi:lightbulb-group", m.name,
-          m.lights_only ? "Lights only" : randomLabel(a.compositions?.[m.id]), !m.lights_only)).join("")}
-      </div>`;
+  }
+
+  // the switch entity, found by its translation key in case the user renamed it
+  _autoAmbience() {
+    const ent = Object.values(this._hass?.entities || {}).find((e) => e.platform === DOMAIN && e.translation_key === "auto_ambience");
+    return this._call(this._snap.ambience?.auto ? "turn_off" : "turn_on", { entity_id: ent?.entity_id || "switch.homehub_media_auto_ambience" }, "switch");
   }
 
   _openEditor(id) {
     const saved = this._snap.ambience?.compositions?.[id] || {};
     const draft = { ...COMP_DEFAULTS, ...saved };
     if (!("visual_enabled" in saved)) draft.visual_enabled = draft.visual != null;
-    this._edit = { id, draft, saved: JSON.stringify(draft), pending: null };
+    this._edit = { id, draft, saved: JSON.stringify(draft), pending: null, sheet: null };
     this._browse = { visual: draft.visual, soundtrack: draft.soundtrack };
     if (!this._catalog) this._load("catalog");
     this._render();
@@ -841,49 +913,74 @@ class HomeHubMediaCard extends HTMLElement {
     const name = this._snap.ambience?.modes?.find((m) => m.id === ed.id)?.name || pretty(ed.id);
     if (!(await this._call("save_mode", { mode: ed.id, ...ed.draft }))) return;
     ed.saved = JSON.stringify(ed.draft);
-    if (ed.videos && JSON.stringify(ed.videos) !== ed.videosSaved) {
-      if (!(await this._call("set_mode_videos", { mode: ed.id, videos: ed.videos.map(({ name: n, url }) => ({ name: n, url })) }))) return;
-      await this._load("catalog");
-      const visuals = videoIds(ed.videos, this._catalog?.visuals);  // what the service saved as the mode's visuals
-      Object.assign(ed.draft, { visual: visuals[0] ?? null, visuals, visual_enabled: visuals.length > 0 });
-      ed.saved = JSON.stringify(ed.draft);
-      ed.videos = null;  // re-read from the catalog, with the new videos' thumbnails
-      this._browse.visual = ed.draft.visual;
-      this._render();
-    }
     this._toast(`Saved ${name}`);
   }
 
-  _addVideo() {
-    const [name, url] = ["name", "url"].map((f) => this.shadowRoot.querySelector(`[data-vadd=${f}]`));
-    if (!name.value.trim() || !url.value.trim()) {
-      this._toast("Enter a name and a YouTube link");
-      (name.value.trim() ? url : name).focus();
-      return;
-    }
-    this._edit.videos.push({ name: name.value.trim(), url: url.value.trim(), preview: null });
+  // every video change saves right away; the list shows the change while it saves and the saved list after
+  async _saveVideos(id, rows) {
+    if (this._vsave || !this._catalog) return false;
+    this._vsave = { id, rows };
     this._render();
-    this.shadowRoot.querySelector("[data-vadd=name]")?.focus();
+    const ok = await this._call("set_mode_videos", { mode: id, videos: rows.map(({ name, url }) => (name ? { name, url } : { url })) });
+    if (ok) await this._load("catalog");
+    this._vsave = null;
+    const ed = this._edit;
+    if (ok && ed?.id === id) {  // the saved rotation, so a later Save of the other settings keeps it
+      const visuals = [...(this._snap.ambience?.compositions?.[id]?.visuals || [])];
+      const patch = { visual: visuals[0] ?? null, visuals, visual_enabled: visuals.length > 0 };
+      Object.assign(ed.draft, patch);
+      ed.saved = JSON.stringify({ ...JSON.parse(ed.saved), ...patch });
+      this._browse.visual = ed.draft.visual;
+    }
+    this._render();
+    return ok;
   }
 
-  _videosHtml() {
-    const vids = this._edit.videos;
-    if (!vids) return "";
-    const field = (attr, f, value, label, ph) => `<input ${attr} data-vf="${f}" value="${esc(value)}" maxlength="200" autocomplete="off"
-      ${f === "url" ? 'type="url" autocapitalize="off" spellcheck="false"' : 'type="text"'} aria-label="${label}" placeholder="${ph}">`;
-    return `<section class="edsec" aria-labelledby="ythead">
-        <h3 class="sh" id="ythead">${icon("mdi:youtube")}YouTube videos</h3>
-        ${vids.length ? `<ul class="vids">${vids.map((v, i) => `<li class="vrow">
-            <span class="art">${icon("mdi:youtube")}${img(v.preview)}</span>
-            <span class="vin">${field(`data-vi="${i}"`, "name", v.name, `Video ${i + 1} name`, "Name")}${field(`data-vi="${i}"`, "url", v.url, `Video ${i + 1} YouTube link`, "YouTube link")}</span>
-            <button class="ib flat" data-a="vdel" data-v="${i}" aria-label="Remove video ${i + 1}">${icon("mdi:delete-outline")}</button>
-          </li>`).join("")}</ul>` : hint("No YouTube videos in this mode")}
-        <div class="vrow">
-          <span class="art">${icon("mdi:playlist-plus")}</span>
-          <span class="vin">${field('data-vadd="name"', "name", "", "New video name", "Name")}${field('data-vadd="url"', "url", "", "New video YouTube link", "YouTube link")}</span>
-          <button class="ib" data-a="vadd" aria-label="Add video">${icon("mdi:plus")}</button>
-        </div>
-      </section>`;
+  async _addVideo() {
+    const field = () => this.shadowRoot.querySelector("[data-keep=add]");
+    const url = field()?.value.trim();
+    if (!url) {
+      this._toast("Paste a YouTube link first");
+      field()?.focus();
+      return;
+    }
+    if (this._vsave || !this._catalog) return;
+    field().value = "";
+    const ok = await this._saveVideos(this._edit.id, [...this._rows(this._edit.id), { name: "", url, preview: null, id: null }]);
+    if (!ok && field() && !field().value) field().value = url;  // a bad link stays for fixing
+  }
+
+  async _removeVideo(i) {
+    const id = this._edit.id;
+    const rows = [...this._rows(id)];
+    const [gone] = rows.splice(i, 1);
+    this._edit.sheet = null;
+    if (gone && await this._saveVideos(id, rows)) {
+      this._toast(`Removed ${gone.name}`, { text: "Undo", action: () => {
+        const back = [...this._rows(id)];
+        back.splice(i, 0, gone);
+        this._saveVideos(id, back);
+      } });
+    }
+  }
+
+  _saveSheet() {
+    const ed = this._edit;
+    const [name, url] = ["name", "url"].map((f) => this.shadowRoot.querySelector(`[data-sheet=${f}]`)?.value.trim() || "");
+    if (!url) {
+      this._toast("Enter a YouTube link");
+      return;
+    }
+    const rows = [...this._rows(ed.id)];
+    rows[ed.sheet] = { ...rows[ed.sheet], name, url };  // no name: YouTube's title
+    ed.sheet = null;
+    this._saveVideos(ed.id, rows);
+  }
+
+  _sheet(i) {
+    this._edit.sheet = i;
+    this._render();
+    this.shadowRoot.querySelector(i == null ? `[data-a=vedit]` : "[data-sheet=name]")?.focus();
   }
 
   async _start() {
@@ -922,20 +1019,58 @@ class HomeHubMediaCard extends HTMLElement {
     </div>`;
   }
 
+  _videosHtml(rows, playing) {
+    if (!this._catalog) return this._catalogErr ? banner(this._catalogErr) : `<div class="skel visual"></div>`;
+    const dis = this._vsave ? " disabled" : "";
+    const grid = rows.length ? `<ul class="vgrid">${rows.map((v, i) => {
+      const name = esc(v.name || "New video");
+      return `<li class="tile">
+        <div class="thumb${v.id && v.id === playing ? " on" : ""}"><span class="ph">${icon("mdi:youtube")}</span>${img(v.preview)}
+          <div class="bar">
+            <button class="vb play" data-a="vplay" data-v="${esc(v.id || "")}" aria-label="Play ${name} on the TV"${v.id ? dis : " disabled"}>${icon("mdi:play")}</button>
+            <span><button class="vb" data-a="vedit" data-v="${i}" aria-label="Edit ${name}"${dis}>${icon("mdi:pencil")}</button><button class="vb del" data-a="vdel" data-v="${i}" aria-label="Remove ${name}"${dis}>${icon("mdi:close")}</button></span>
+          </div>
+        </div>
+        <span class="cap">${v.name ? name : "Adding…"}</span>
+      </li>`;
+    }).join("")}</ul>` : `<div class="idle">No videos yet. Paste a YouTube link below.</div>`;
+    const s = this._edit.sheet;
+    const row = rows[s];
+    const field = (key, f, value, label, more) => `<label>${label}<input data-keep="${key}${s}" data-sheet="${f}" type="text" value="${esc(value)}" maxlength="200" autocomplete="off" ${more}></label>`;
+    const sheet = row ? `<div class="sheet" role="group" aria-label="Edit video">
+        ${field("sn", "name", row.name, "Name", 'placeholder="From YouTube"')}
+        ${field("su", "url", row.url, "YouTube link", 'inputmode="url" autocapitalize="off" spellcheck="false"')}
+        <div class="acts"><button class="btn sm" data-a="vcancel">Cancel</button><button class="btn sm primary" data-a="vsave"${dis}>Save</button></div>
+      </div>` : "";
+    return `${grid}${sheet}
+      <div class="add">
+        <input data-keep="add" type="text" inputmode="url" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false"
+          placeholder="Paste a YouTube link…" aria-label="YouTube link to add">
+        <button class="btn primary" data-a="vadd"${dis}>${icon("mdi:plus")}Add</button>
+      </div>`;
+  }
+
   _editorHtml() {
     const a = this._snap.ambience || {};
     const ed = this._edit;
     const d = ed.draft;
     const mode = a.modes.find((m) => m.id === ed.id);
     const live = a.mode === ed.id;
+    const rows = this._rows(ed.id);
+    const n = rows.length;
+    const head = `<div class="edhead">
+        <button class="ib flat" data-a="edclose" aria-label="Back to modes">${icon("mdi:arrow-left")}</button>
+        <div class="edtitle"><b>${esc(mode.name)}</b><small>${n > 1 ? `One of ${n} videos plays at random, on loop` : n ? "Plays on loop" : "No videos yet"} · saves right away</small></div>
+        ${a.backend === "pc" ? `<button class="ib flat${this._refreshing ? " spin" : ""}" data-a="refresh" aria-label="Rescan media">${icon("mdi:refresh")}</button>` : ""}
+        ${live
+          ? `<button class="btn sm primary" data-a="amb_stop">${icon("mdi:stop")}Stop</button>`
+          : `<button class="btn sm primary" data-a="start">${icon("mdi:play")}Start</button>`}
+      </div>
+      ${this._videosHtml(rows, live ? a.visual : null)}`;
+    if (a.backend !== "pc") return head;  // YouTube only: the videos are the whole mode
     const mix = clamp(100 - (Number(d.original_volume) || 0), 0, 100);
     const chip = (act, field, on, ic, label, aria) => `<button class="chip" data-a="${act}" data-v="${field}" aria-pressed="${!!on}"${aria ? ` aria-label="${aria}"` : ""}>${icon(ic)}${label}</button>`;
-    return `<div class="edhead">
-        <button class="ib flat" data-a="edclose" aria-label="Back to modes">${icon("mdi:arrow-left")}</button>
-        <span class="mi on">${icon(mode.icon || "mdi:lightbulb-group")}</span>
-        <div class="edtitle"><b>${esc(mode.name)}</b><small>${live ? "Live: changes apply right away" : "Pick a visual and a soundtrack"}</small></div>
-        <button class="ib flat${this._refreshing ? " spin" : ""}" data-a="refresh" aria-label="Rescan media">${icon("mdi:refresh")}</button>
-      </div>
+    return `${head}
       <section class="edsec">
         <h3 class="sh">${icon("mdi:image-outline")}Visual</h3>
         ${this._carouselHtml("visual")}
@@ -946,7 +1081,6 @@ class HomeHubMediaCard extends HTMLElement {
         </div>
         ${randomLabel(d) ? hint(`${randomLabel(d)} each time the mode starts`, "mdi:shuffle-variant") : ""}
       </section>
-      ${this._videosHtml()}
       <section class="edsec">
         <h3 class="sh">${icon("mdi:music-note-outline")}Soundtrack</h3>
         ${this._carouselHtml("soundtrack")}
@@ -964,12 +1098,7 @@ class HomeHubMediaCard extends HTMLElement {
           aria-label="Mix between the visual's own sound and the soundtrack" aria-valuetext="${100 - mix}% ambience, ${mix}% soundtrack">
         <div class="mixlab"><span>Ambience <b data-mixa>${100 - mix}%</b></span><span>Soundtrack <b data-mixs>${mix}%</b></span></div>
       </section>
-      <div class="actions">
-        <button class="btn" data-a="save">${icon("mdi:content-save-outline")}Save</button>
-        ${live
-          ? `<button class="btn primary" data-a="amb_stop">${icon("mdi:stop")}Stop</button>`
-          : `<button class="btn primary" data-a="start">${icon("mdi:play")}Start</button>`}
-      </div>`;
+      <div class="actions"><button class="btn" data-a="save">${icon("mdi:content-save-outline")}Save settings</button></div>`;
   }
 
   // ---------- library tab ----------
@@ -1025,12 +1154,14 @@ class HomeHubMediaCard extends HTMLElement {
         this.shadowRoot.querySelector("[data-kbdin]").value = "";
         return this._kbd("keyboard_key", { key: "clear" });
       }
+      case "ksend": return this._sendTyped(this.shadowRoot.querySelector("[data-kbdin]"));
       case "digit": return this._digit(v);
       case "pc_open": return this._call("pc_open", { client: v });
       case "pc_close": return this._call("pc_close");
       case "drawer": return this._toggleDrawer();
-      case "mode": return this._snap.ambience?.mode === v ? this._call("ambience_stop") : this._call("ambience_start", { mode: v });
-      case "auto": return this._call("ambience_auto");
+      case "mode": return this._call("ambience_start", { mode: v });
+      case "next": return this._call("ambience_start", { mode: this._snap.ambience?.mode, video: v });
+      case "auto": return this._autoAmbience();
       case "amb_stop": return this._call("ambience_stop");
       case "edit": return this._openEditor(v);
       case "edclose": return this._closeEditor();
@@ -1050,11 +1181,11 @@ class HomeHubMediaCard extends HTMLElement {
         : { visual_enabled: true, visual: ed.draft.visual ?? this._cur("visual").item?.id ?? null });
       case "audio": return this._editSet({ soundtrack: ed.draft.soundtrack != null ? null : this._cur("soundtrack").item?.id ?? null });
       case "vadd": return this._addVideo();
-      case "vdel": {
-        ed.videos.splice(Number(v), 1);
-        this._render();
-        return this.shadowRoot.querySelector("[data-vadd=name]")?.focus();
-      }
+      case "vdel": return this._removeVideo(Number(v));
+      case "vedit": return this._sheet(Number(v));
+      case "vcancel": return this._sheet(null);
+      case "vsave": return this._saveSheet();
+      case "vplay": return this._call("ambience_start", { mode: ed.id, video: v });
       case "save": return this._save();
       case "start": return this._start();
       case "play": {
@@ -1070,7 +1201,7 @@ class HomeHubMediaCard extends HTMLElement {
     this._noClickUntil = 0;  // a new press is a new gesture: only the click ending a swipe/hold is swallowed
     const tp = e.target.closest?.("[data-touch]");
     if (tp) return this._tpDown(e, tp);
-    if (e.target.closest?.("[data-a=kclear]")) e.preventDefault();  // keep the phone keyboard open
+    if (e.target.closest?.("[data-a=kclear],[data-a=ksend]")) e.preventDefault();  // keep the phone keyboard open
     const sw = e.target.closest?.("[data-swipe]");
     if (sw) this._swipe = { x: e.clientX, y: e.clientY, id: e.pointerId, kind: sw.dataset.swipe };
     const h = e.target.closest?.("[data-hold]");
@@ -1141,21 +1272,20 @@ class HomeHubMediaCard extends HTMLElement {
       e.stopPropagation();  // keep HA's global shortcuts out of the text field
       if (e.key === "Enter" && !e.isComposing) {
         e.preventDefault();
-        const text = t.value.replace(/[\u0000-\u001f\u007f]/g, "");  // eslint-disable-line no-control-regex
-        t.value = "";
-        if (text) this._kbd("send_text", { text });
+        this._sendTyped(t);
       } else if (e.key === "Backspace" && !t.value) {
         e.preventDefault();
         this._kbd("keyboard_key", { key: "backspace" });
       }
       return;
     }
-    if (t.matches?.("[data-vi], [data-vadd]")) {
+    if (t.matches?.("[data-keep]")) {
       e.stopPropagation();  // keep HA's global shortcuts out of the text field
-      if (e.key === "Enter" && !e.isComposing && t.dataset.vadd) {
+      if (e.key === "Enter" && !e.isComposing) {
         e.preventDefault();
-        this._addVideo();
-      }
+        if (t.dataset.sheet) this._saveSheet();
+        else this._addVideo();
+      } else if (e.key === "Escape" && t.dataset.sheet) this._sheet(null);
       return;
     }
     if (e.key === "Escape" && this._config.drawer && this._open) {
@@ -1197,6 +1327,12 @@ class HomeHubMediaCard extends HTMLElement {
     }
   }
 
+  _sendTyped(t) {
+    const text = t.value.replace(/[\u0000-\u001f\u007f]/g, "");  // eslint-disable-line no-control-regex
+    t.value = "";
+    if (text) this._kbd("send_text", { text });
+  }
+
   _onInput(e) {
     const t = e.composedPath()[0];
     if (t.matches?.("[data-volume]")) {
@@ -1208,11 +1344,6 @@ class HomeHubMediaCard extends HTMLElement {
         this._volTimer = null;
         this._call("set_volume", { level });
       }, 250);
-      return;
-    }
-    if (t.matches?.("[data-vi]") && this._edit?.videos) {
-      this._edit.videos[t.dataset.vi][t.dataset.vf] = t.value;
-      this._slices.ambmain = JSON.stringify(this._ambSlice());  // the field already shows it: no re-render while typing
       return;
     }
     if (!t.matches?.("[data-mix]") || !this._edit) return;
@@ -1258,11 +1389,16 @@ button:disabled { opacity: .38; cursor: default; }
 :focus-visible { outline: 2px solid var(--hh-accent); outline-offset: 2px; }
 .wrap { container: hh / inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 12px; }
 .body, .remote, .col { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; min-width: 0; }
-.row, .ctl { display: flex; align-items: center; gap: 8px; }
-.ctl { justify-content: center; gap: 10px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.row.center { justify-content: center; gap: 10px; }
+.ctl { display: grid; gap: 12px; }
 .grow { flex: 1; }
-h3.sh { display: flex; align-items: center; gap: 8px; margin: 0 2px 10px; font-size: 14px; font-weight: 600; color: var(--hh-fg2); }
-h3.sh ha-icon { --mdc-icon-size: 18px; }
+h3.sh {
+  display: flex; align-items: center; gap: 8px; margin: 0 2px 10px; font-size: 12px; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--hh-fg2);
+}
+h3.sh ha-icon { --mdc-icon-size: 16px; }
+.sh .note { text-transform: none; letter-spacing: 0; font-size: 13px; }
 .sh .chip, .sh .note { margin-left: auto; }
 .note { font-weight: 600; color: var(--hh-fg); }
 .hint { display: flex; align-items: center; gap: 6px; margin: 6px 4px 0; font-size: 12.5px; color: var(--hh-fg2); }
@@ -1274,6 +1410,8 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
   background: var(--hh-s1); color: var(--hh-fg);
 }
 .ib.flat { background: none; }
+.ib.sm { min-width: 36px; height: 36px; }
+.ib.sm ha-icon { --mdc-icon-size: 18px; }
 .ib.on { background: var(--hh-soft); color: var(--hh-accent); }
 .ib.accent { background: var(--hh-accent); color: var(--hh-on-accent); box-shadow: 0 4px 12px -4px rgba(var(--hh-rgb), .7); }
 .ib.power ha-icon { color: var(--error-color, #db4437); }
@@ -1282,6 +1420,7 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
   border-radius: 999px; background: var(--hh-s1); box-shadow: inset 0 0 0 1px var(--hh-line); font-weight: 600; font-size: 14px;
 }
 .btn ha-icon { --mdc-icon-size: 18px; }
+.btn.sm { min-height: 36px; padding: 0 14px; gap: 6px; font-size: 13px; white-space: nowrap; }
 .btn.primary { background: var(--hh-accent); color: var(--hh-on-accent); box-shadow: 0 4px 14px -6px rgba(var(--hh-rgb), .8); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chips.center { justify-content: center; }
@@ -1362,12 +1501,12 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .pad { display: grid; justify-items: center; gap: 10px; }
 .dpad {
   display: grid; grid-template: ". u ." 1fr "l o r" 1fr ". d ." 1fr / 1fr 1fr 1fr;
-  width: 240px; width: min(240px, 72cqi); aspect-ratio: 1; border-radius: 50%; padding: 6px;
+  width: 260px; width: min(260px, 76cqi); aspect-ratio: 1; border-radius: 50%; padding: 6px;
   background: radial-gradient(circle, transparent 38%, var(--hh-s1) 38.5%), var(--hh-s1);
   box-shadow: inset 0 0 0 1px var(--hh-line); touch-action: pan-y;
 }
 .dk { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; color: var(--hh-fg2); }
-.dk ha-icon { --mdc-icon-size: 34px; }
+.dk ha-icon { --mdc-icon-size: 30px; }
 .dk:active { background: var(--hh-s2); color: var(--hh-fg); }
 .dk.up { grid-area: u; } .dk.down { grid-area: d; } .dk.left { grid-area: l; } .dk.right { grid-area: r; }
 .ok {
@@ -1390,15 +1529,19 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .rocker .mute ha-icon { --mdc-icon-size: 20px; color: var(--hh-fg2); }
 .rocker .mute.on ha-icon { color: var(--error-color, #db4437); }
 .rocker button:active { background: var(--hh-s2); }
-.apps { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 10px; }
+.apps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .app {
-  position: relative; display: grid; place-items: center; height: 60px; padding: 0 10px; border-radius: 14px; overflow: hidden;
-  background: var(--b, var(--hh-s2)); color: var(--f, var(--hh-accent)); font-size: 15px; font-weight: 700; letter-spacing: -.01em;
-  line-height: 1.15; text-align: center; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06), 0 1px 3px rgba(0, 0, 0, .18);
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; aspect-ratio: 1.3;
+  min-width: 0; padding: 4px; border-radius: 12px; overflow: hidden; background: var(--b, var(--hh-s2)); color: var(--f, var(--hh-accent));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06), 0 1px 3px rgba(0, 0, 0, .18);
 }
+.app svg { width: 26px; height: 26px; fill: currentColor; flex: none; }
+.app ha-icon { --mdc-icon-size: 26px; }
+.app .cap { max-width: 100%; font-size: 11px; font-weight: 600; line-height: 1.1; opacity: .9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app .wm { font-size: 16px; font-weight: 800; line-height: 1.1; text-align: center; }
 .app::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(255, 255, 255, .14), transparent 60%); pointer-events: none; }
 .app.on { box-shadow: 0 0 0 2px var(--hh-bg), 0 0 0 4px var(--hh-accent), 0 10px 24px -8px rgba(var(--hh-rgb), .9); }
-.kbdwrap { display: grid; }
+.kbdwrap { display: grid; grid-template-columns: minmax(0, 1fr); }
 .kbd {
   display: flex; align-items: center; gap: 4px; height: 48px; padding: 0 2px 0 14px; border-radius: 999px;
   background: var(--hh-s1); box-shadow: inset 0 0 0 1px var(--hh-line); transition: box-shadow .15s, background-color .15s;
@@ -1408,6 +1551,7 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .kbd input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: none; color: inherit; font: inherit; font-size: 16px; }
 .kbd input::placeholder { color: var(--hh-fg2); opacity: 1; }
 .kbd .ib { background: none; }
+.kbd .btn { margin-right: 4px; }
 .chd { margin-left: auto; min-width: 4ch; font-size: 22px; font-weight: 600; color: var(--hh-fg); font-variant-numeric: tabular-nums; text-align: right; }
 .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 320px; margin: 0 auto 12px; }
 .key { min-height: 52px; border-radius: 14px; background: var(--hh-s1); font-size: 20px; font-weight: 500; display: grid; place-items: center; }
@@ -1415,26 +1559,72 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .key.go { background: var(--hh-soft); color: var(--hh-accent); }
 
 /* ambience */
-.modes { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
-.mode { position: relative; min-width: 0; }
-.mt {
-  display: grid; align-content: space-between; justify-items: start; gap: 14px; width: 100%; min-height: 104px; padding: 12px;
-  border-radius: 16px; background: var(--hh-s1); text-align: left;
+.ambmain { display: grid; gap: 12px; min-width: 0; }
+.ambmain h3.sh { margin-bottom: 0; }
+.ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--hh-fg2); background: radial-gradient(circle at 30% 20%, rgba(var(--hh-rgb), .28), transparent 65%), var(--hh-s2); }
+.ph ha-icon { --mdc-icon-size: 40px; opacity: .7; }
+/* artwork is dark in either theme, so the white text on it is too */
+.hero .ph, .mode .ph { color: rgba(255, 255, 255, .7); background: radial-gradient(circle at 30% 20%, rgba(var(--hh-rgb), .5), transparent 70%), #1e252e; }
+.hero img, .mode img, .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.hero { position: relative; aspect-ratio: 16 / 9; max-height: 300px; width: 100%; border-radius: 16px; overflow: hidden; background: #000; color: #fff; isolation: isolate; }
+.hero .over {
+  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 12px;
+  background: linear-gradient(rgba(0, 0, 0, .5), transparent 35%, transparent 40%, rgba(0, 0, 0, .82));
 }
-.mi { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--hh-s2); color: var(--hh-fg2); transition: background-color .2s, color .2s, box-shadow .2s; }
-.mx { display: grid; gap: 2px; width: 100%; min-width: 0; }
-.mx b { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mx small { display: flex; align-items: center; gap: 6px; min-height: 18px; font-size: 12px; color: var(--hh-fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.badge { padding: 1px 7px; border-radius: 999px; background: var(--hh-accent); color: var(--hh-on-accent); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; }
-.mode.on .mt { background: var(--hh-soft); box-shadow: inset 0 0 0 1.5px rgba(var(--hh-rgb), .55); }
-.mode.on .mi, .mi.on { background: var(--hh-accent); color: var(--hh-on-accent); box-shadow: 0 0 18px rgba(var(--hh-rgb), .55); }
-.gear { position: absolute; top: 2px; right: 2px; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; color: var(--hh-fg2); }
-.gear ha-icon { --mdc-icon-size: 20px; }
-@media (hover: hover) { .mt:hover { background: var(--hh-s2); } .mode.on .mt:hover { background: rgba(var(--hh-rgb), .2); } .gear:hover { background: var(--hh-s2); } }
-.edhead { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.hero .top { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.live { display: inline-flex; align-items: center; gap: 6px; }
+.live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ff5a4e; box-shadow: 0 0 0 3px rgba(255, 90, 78, .3); }
+.hn, .hero small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hn { font-size: 20px; font-weight: 700; }
+.hero small { font-size: 13px; opacity: .88; }
+.acts { display: flex; gap: 6px; margin-top: 8px; }
+.hb {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 12px; border-radius: 999px; white-space: nowrap;
+  background: rgba(255, 255, 255, .2); color: #fff; font-size: 13px; font-weight: 600; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+.hb ha-icon { --mdc-icon-size: 18px; }
+.hb.primary { background: #fff; color: #111; }
+@media (hover: hover) { .hb:not(.primary):hover { background: rgba(255, 255, 255, .3); } }
+.idle {
+  display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; border: 1px dashed var(--hh-line);
+  border-radius: 14px; color: var(--hh-fg2); font-size: 13.5px; text-align: center; text-wrap: balance;
+}
+.sleep h3.sh { margin-bottom: 6px; min-height: 36px; }
+.sleep .ib { margin-left: -4px; }
+.slchips { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.slchips .chip { justify-content: center; padding: 0 6px; }
+.modes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.mode { position: relative; min-width: 0; aspect-ratio: 16 / 10; border-radius: 14px; overflow: hidden; background: #1e252e; }
+.mt { position: absolute; inset: 0; display: block; width: 100%; color: #fff; text-align: left; }
+.mt:active:not(:disabled) { transform: none; }
+.mode img { transition: transform .3s var(--hh-ease); }
+@media (hover: hover) { .mode:hover img { transform: scale(1.04); } }
+.lab { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 8px; background: linear-gradient(transparent, rgba(0, 0, 0, .82)); }
+.lab b, .lab small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lab b { font-size: 15px; font-weight: 600; }
+.lab small { font-size: 12px; opacity: .88; }
+.mode.on::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 3px var(--hh-accent); pointer-events: none; }
+.mode.on .lab small { opacity: 1; font-weight: 600; }
+.edit, .vb { display: grid; place-items: center; border-radius: 50%; background: rgba(8, 12, 18, .66); color: #fff; }
+.edit { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; }
+.edit ha-icon, .vb ha-icon { --mdc-icon-size: 17px; }
+.auto { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: var(--hh-s1); }
+.ax { flex: 1; min-width: 0; }
+.ax b { display: block; font-size: 14px; font-weight: 600; }
+.ax b span { font-weight: 400; color: var(--hh-fg2); }
+.ax small { display: block; font-size: 12px; color: var(--hh-fg2); }
+.sw { position: relative; flex: none; width: 46px; height: 28px; border-radius: 999px; background: var(--hh-s3); }
+.sw::after {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .2s var(--hh-ease);
+}
+.sw[aria-checked=true] { background: var(--hh-accent); }
+.sw[aria-checked=true]::after { transform: translateX(18px); }
+.sw:active:not(:disabled) { transform: none; }
+.edhead { display: flex; align-items: center; gap: 8px; }
 .edtitle { flex: 1; min-width: 0; }
 .edtitle b { display: block; font-size: 17px; font-weight: 600; }
-.edtitle small { display: block; font-size: 12.5px; color: var(--hh-fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edtitle small { display: block; font-size: 12px; line-height: 1.35; color: var(--hh-fg2); }
 .spin ha-icon { animation: hh-spin 1s linear infinite; }
 @keyframes hh-spin { to { transform: rotate(360deg); } }
 .edsec { display: grid; gap: 10px; margin-top: 16px; }
@@ -1446,8 +1636,6 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .slide:active { transform: none; }
 .art { position: relative; display: block; overflow: hidden; }
 .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--hh-fg2); background: radial-gradient(circle at 30% 20%, rgba(var(--hh-rgb), .28), transparent 65%), var(--hh-s2); }
-.ph ha-icon { --mdc-icon-size: 40px; opacity: .7; }
 .cap b, .cap small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cap b { font-size: 15px; font-weight: 600; }
 .cap small { font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; }
@@ -1470,10 +1658,10 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .car.visual .prev { left: 4px; } .car.visual .next { right: 4px; }
 .car.visual .fav { top: 4px; right: 4px; }
 .car.visual .rot { top: 4px; right: 48px; }
-.volrow { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
-.volrow:empty { display: none; }
-.volrow ha-icon { flex: none; color: var(--hh-fg2); }
+.volrow { display: flex; align-items: center; gap: 10px; }
 .volrow input { flex: 1; min-width: 0; }
+.volrow output { min-width: 3ch; text-align: right; color: var(--hh-fg2); font-variant-numeric: tabular-nums; }
+.ib.mute.on ha-icon { color: var(--error-color, #db4437); }
 /* soundtrack: compact row */
 .car.soundtrack { display: flex; align-items: center; gap: 2px; padding: 8px 4px; }
 .car.soundtrack .slide { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 4px; }
@@ -1497,16 +1685,29 @@ input[type=range]:focus-visible { outline: none; }
 input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--hh-accent), 0 0 0 6px rgba(var(--hh-rgb), .3); }
 .mixlab { display: flex; justify-content: space-between; margin-top: -4px; font-size: 12.5px; color: var(--hh-fg2); }
 .mixlab b { color: var(--hh-fg); font-weight: 600; font-variant-numeric: tabular-nums; }
-.vids { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.vrow { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
-.vrow .art { display: grid; place-items: center; aspect-ratio: 16 / 9; border-radius: 8px; background: var(--hh-s2); color: var(--hh-fg2); }
-.vin { display: grid; gap: 6px; min-width: 0; }
-.vin input {
-  width: 100%; height: 40px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--hh-s1); color: inherit;
+.vgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.tile { display: grid; gap: 5px; min-width: 0; }
+.thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden; background: var(--hh-s2); }
+.thumb .ph ha-icon { --mdc-icon-size: 28px; }
+.thumb.on::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 3px var(--hh-accent); pointer-events: none; }
+.bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; padding: 4px; background: linear-gradient(transparent, rgba(0, 0, 0, .7)); }
+.bar span { display: flex; gap: 4px; }
+.vb { width: 34px; height: 34px; }
+.vb.play { background: var(--hh-accent); color: var(--hh-on-accent); }
+@media (hover: hover) { .vb.del:hover { background: var(--error-color, #db4437); } }
+.tile .cap { font-size: 12.5px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.add { display: flex; gap: 8px; }
+.add input, .sheet input {
+  flex: 1; width: 100%; min-width: 0; height: 44px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--hh-s1); color: inherit;
   box-shadow: inset 0 0 0 1px var(--hh-line); font: inherit; font-size: 16px; outline: 0;
 }
-.vin input:focus-visible { background: var(--hh-bg); box-shadow: inset 0 0 0 2px var(--hh-accent); }
-.vin input::placeholder { color: var(--hh-fg2); opacity: 1; }
+.add input:focus-visible, .sheet input:focus-visible { background: var(--hh-bg); box-shadow: inset 0 0 0 2px var(--hh-accent); }
+.add input::placeholder, .sheet input::placeholder { color: var(--hh-fg2); opacity: 1; }
+.add .btn { padding: 0 16px; }
+.sheet { display: grid; gap: 8px; padding: 12px; border-radius: 12px; background: var(--hh-s1); }
+.sheet label { display: grid; gap: 4px; font-size: 12px; color: var(--hh-fg2); }
+.sheet input { background: var(--hh-bg); }
+.sheet .acts { justify-content: flex-end; margin: 0; }
 .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .actions .btn { min-width: 112px; }
 
@@ -1558,4 +1759,4 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === TAG)) {
   window.customCards.push({ type: TAG, name: "HomeHub Media", description: "Remote, ambience and library", preview: true });
 }
-if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeVideos, videoIds };
+if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeIds, nextId, modeVideos };

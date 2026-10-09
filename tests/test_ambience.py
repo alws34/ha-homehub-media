@@ -546,3 +546,20 @@ async def test_youtube_is_offered_when_the_media_folder_cannot_be_read(hass):
     assert am.error == "Cannot read the ambience media folder"
     assert [v["id"] for v in am.catalog()["visuals"]] == ["star_night"]
     await am.async_shutdown()
+
+
+async def test_start_plays_the_given_video_and_the_snapshot_shows_it(hass, monkeypatch):
+    am = await yt_manager(hass)
+    monkeypatch.setattr("custom_components.homehub_media.ambience.random.choice",
+                        lambda pool: pytest.fail(f"picked from {pool}"))
+    await am.save_mode("chill", {"visuals": ["star_night", "fire"]})
+    assert am.snapshot()["visual"] is None
+    await am.start("chill", video="fire")
+    am._hub.tv.play_youtube.assert_awaited_once_with("fireFIREfir", "111299001912")
+    snap = am.snapshot()
+    assert snap["visual"] == "fire" and snap["compositions"]["chill"]["visuals"] == ["star_night", "fire"]
+    with pytest.raises(ServiceValidationError, match="Unknown video"):
+        await am.start("chill", video="ghost")
+    assert am.mode == "chill"  # a bad video changes nothing
+    await am.stop()
+    assert am.snapshot()["visual"] is None

@@ -148,13 +148,13 @@ To cap the output at 1080p, add `-vf "scale=-2:'min(1080,ih)'"` before `-c:v`.
 **Assign visuals and soundtracks to a mode**
 
 1. Open the **Ambience** tab in the card.
-2. Select the edit button (sliders icon) on the mode's tile. Lights-only modes have none.
-3. Browse visuals and soundtracks with the arrows or by swiping, and tap one to use it. Set the on, loop, and random-start options and the mix.
-4. Select **Save**.
+2. Select the edit button (pencil) on the mode's tile. Lights-only modes have none.
+3. When ambience plays on the media PC, browse visuals and soundtracks with the arrows or by swiping, and tap one to use it. Set the on, loop, and random-start options and the mix.
+4. Select **Save settings**.
 
-If the mode is running, changes apply right away, but they are kept only after you select **Save**.
+If the mode is running, changes apply right away, but they are kept only after you select **Save settings**. When ambience plays on the TV, the editor shows only the mode's YouTube videos (see [YouTube ambience](#youtube-ambience)).
 
-**Random from several videos per mode**: in the visual carousel, the shuffle button on a video adds it to the mode's rotation, and pressing it again removes it. When the rotation has videos, each start of the mode picks one of them at random, and the chosen visual is used only when the rotation is empty. A rotation can hold up to 50 videos and can mix local files and YouTube videos. The mode's tile shows "Random from N videos" when the rotation has two or more. Select **Save** to keep the rotation. In automations, `save_mode` and `ambience_update` take the rotation as `visuals`, a list of visual IDs.
+**Random from several videos per mode**: in the visual carousel, the shuffle button on a video adds it to the mode's rotation, and pressing it again removes it. When the rotation has videos, each start of the mode picks one of them at random, and the chosen visual is used only when the rotation is empty. A rotation can hold up to 50 videos and can mix local files and YouTube videos. The mode's tile shows how many videos the mode has. Select **Save settings** to keep the rotation. In automations, `save_mode` and `ambience_update` take the rotation as `visuals`, a list of visual IDs.
 
 **Media PC users**: if ambience plays on the media PC, the videos and soundtracks live on that PC. Follow [media-pc/README.md](media-pc/README.md). Preview images for the media PC go in Home Assistant's `www/Ambience` folder as `<id>.webp` or `<id>.png`.
 
@@ -172,12 +172,13 @@ The videos appear in the card's visual carousel in the order you entered them, w
 
 **Edit a mode's videos in the card** (admin users)
 
-1. On the **Ambience** tab, select the edit button on a mode.
-2. Under **YouTube videos**, each of the mode's videos shows its thumbnail, name, and link. Change a name or link in place, or select the bin button to remove a video.
-3. To add a video, enter a name and a link in the empty row at the bottom, then select the plus button or press Enter.
-4. Select **Save**.
+1. On the **Ambience** tab, select the edit button (pencil) on a mode, or **Videos** while the mode plays.
+2. Each of the mode's videos shows its thumbnail. The play button plays that video on the TV now, the pencil opens its name and link for editing, and the cross removes it (select **Undo** in the message to bring it back).
+3. To add a video, paste its link into **Paste a YouTube link…** and select **Add** or press Enter. The name is the video's YouTube title (its video ID if YouTube cannot be reached); you can change it with the pencil.
 
-On **Save**, the list becomes the mode's visuals: the first video is the mode's visual, and all of them form its random rotation (local files in the rotation are replaced). The videos are added to the **Configure › Ambience** list, or changed there when a video with the same name exists, and that name's link changes for every mode that uses it. A video you remove leaves that list too, unless another mode still uses it. A link that is not a YouTube video shows an error and nothing is saved. In automations, call `set_mode_videos`.
+Every change is saved right away. The list becomes the mode's visuals: the first video is the mode's visual, and all of them form its random rotation (local files in the rotation are replaced). The videos are added to the **Configure › Ambience** list, or changed there when a video with the same name exists, and that name's link changes for every mode that uses it. A video you remove leaves that list too, unless another mode still uses it. A link that is not a YouTube video shows an error and nothing is saved. In automations, call `set_mode_videos`; a video without a `name` gets its YouTube title (at most 80 characters, `=` and line breaks removed).
+
+While a mode plays, the card shows it on top: the video playing, which of the mode's videos it is, **Stop**, **Next video** (when the mode has two or more), **Videos**, and the sleep timer.
 
 **What happens on the TV**
 
@@ -253,7 +254,7 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 | `pointer` | `action`, *`dx`*, *`dy`*, *`target`* | `action` is `move`, `click`, `right_click`, or `scroll`. `dx` and `dy` (-500 to 500) set the move distance, and `dy` sets the scroll amount. `target` is `tv` or `pc`, and defaults to the PC when that is the activity, otherwise the TV. The TV supports only `move` and `click`. |
 | `set_activity` | `activity`, *`force`* | Switches to `off`, `tv`, `box`, or `pc`. With `force`, an input switch by source name is sent at least twice, for TVs that ignore the first one. |
 | `channel` | `number` | Tunes the streaming box to a channel number of 1 to 4 digits. Needs the box's media player. |
-| `ambience_start` | `mode` | Starts a mode by ID, for example `fireplace`. |
+| `ambience_start` | `mode`, optional `video` | Starts a mode by ID, for example `fireplace`. With `video` (a visual ID from the catalog), plays that video instead of the mode's own pick. |
 | `ambience_stop` | | Stops ambience and restores the lights. |
 | `ambience_update` | *`visual`*, *`visual_enabled`*, *`video_loop`*, *`video_random_start`*, *`original_volume`*, *`soundtrack`*, *`soundtrack_loop`*, *`soundtrack_random_start`*, *`soundtrack_volume`*, *`visuals`* | Changes what the running ambience plays. `visual` and `soundtrack` are media IDs (a radio station ID works as a soundtrack). The volumes are 0 to 100. `visuals` is the mode's rotation, a list of up to 50 visual IDs (see [random from several videos](#ambience-videos-and-soundtracks)); changing it does not change the running video. Switching between a YouTube video and a local file starts the mode again. Works only while a mode with video or sound is running. |
 | `save_mode` | `mode`, plus the `ambience_update` fields | Saves the fields as the mode's default. Fields you leave out get their defaults: no visual or soundtrack, an empty rotation, loop and random start on, video volume 20, soundtrack volume 100. |
@@ -262,7 +263,7 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 | `ambience_sleep_timer` | `minutes` | Stops ambience after `minutes` (0 to 600). 0 cancels the timer. Needs a running mode. |
 | `refresh_catalog` | | Rescans the ambience folders (or the media PC) for visuals and soundtracks. |
 | `rescan_apps` | | Asks the TV which streaming apps are installed. The TV must be on. Admin users only. |
-| `set_mode_videos` | `mode`, `videos` (a list of `name` and `url`) | Sets the mode's YouTube videos, as **Save** does in the card's video list (see [YouTube ambience](#youtube-ambience)). An empty list leaves the mode without visuals. Admin users only. |
+| `set_mode_videos` | `mode`, `videos` (a list of `url` and optional `name`) | Sets the mode's YouTube videos, as the card's video list does (see [YouTube ambience](#youtube-ambience)). An empty list leaves the mode without visuals. Admin users only. |
 | `play_library_item` | `server`, `item_id` | Opens Plex or Jellyfin on the TV and plays an item. `server` is `plex` or `jellyfin`, and `item_id` is the item's ID on that server. |
 | `pc_open` | `client` | Opens an app on the media PC by its name, as listed in the Media PC options. Switches the activity to Media PC and stops ambience that plays video or sound. |
 | `pc_close` | | Closes the app open on the media PC. |
@@ -400,5 +401,7 @@ logger:
 ## Credits
 
 HomeHub Media is based on the original HomeHub Media Controller & Ambience bundle by the original HomeHub author.
+
+App logos: Simple Icons (CC0); trademarks belong to their owners.
 
 Released under the [MIT License](LICENSE).
