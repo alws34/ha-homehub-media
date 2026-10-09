@@ -1,0 +1,42 @@
+import os
+from pathlib import Path
+
+import pytest
+
+from custom_components.homehub_media import catalog as c
+
+
+def test_slugify():
+    assert c.slugify("Cozy Fireplace 4K") == "cozy_fireplace_4k"
+    assert c.slugify("!!!") == "media"
+    assert len(c.slugify("a" * 200)) == 64
+
+
+def test_scan_ids_collisions_previews_and_escape(tmp_path: Path):
+    root = tmp_path / "videos"; (root / "sub").mkdir(parents=True)
+    (root / "Rain.mp4").write_bytes(b"x"); (root / "sub" / "rain.mkv").write_bytes(b"x")
+    (root / "Rain.webp").write_bytes(b"x"); (root / "notes.txt").write_text("x")
+    outside = tmp_path / "secret.mp4"; outside.write_bytes(b"x")
+    os.symlink(outside, root / "evil.mp4")
+    items = c.scan(root, "visual")
+    assert [i["id"] for i in items] == ["rain", "rain_2"]
+    assert items[0]["preview_path"] == "Rain.webp" and items[0]["title"] == "Rain"
+    assert all("evil" not in i["path"] for i in items)
+
+
+@pytest.mark.parametrize("url", ["http://x/a", "https://u:p@x/a", "https://x/a#f", "file:///etc/passwd"])
+def test_radio_rejects_bad_urls(url):
+    with pytest.raises(ValueError):
+        c.radio_items({"radio_x": url})
+
+
+def test_composition_defaults_and_strictness():
+    comp = c.validate_composition({"visual": "rain"})
+    assert comp["visual_enabled"] is True and comp["original_volume"] == 20 and comp["soundtrack_volume"] == 100
+    with pytest.raises(ValueError):
+        c.validate_composition({"original_volume": 101})
+    with pytest.raises(ValueError):
+        c.validate_composition({"video_loop": "yes"})
+    with pytest.raises(ValueError):
+        c.validate_composition({"bogus": 1})
+    assert c.validate_composition({"soundtrack_volume": 50}, partial=True) == {"soundtrack_volume": 50}
