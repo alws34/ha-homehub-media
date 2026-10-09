@@ -107,6 +107,8 @@ normalised to `{id, title, subtitle, progress, image, server}`. Artwork proxied 
 so server tokens never reach the browser. Tap = launch the server's TV app, wait for its session/client, then play
 (Plex `play_media` via core plex entity if present; Jellyfin `POST /Sessions/{id}/Playing` with resume ticks).
 If remote play is unsupported by the TV app, the app is still opened and the card says so.
+*As built:* if the Plex or Jellyfin TV app is not installed, `launch_app` opens that server's configured URL in the
+TV browser instead (the web client then serves as the play target).
 
 ### Media PC & keyboard bridge clients
 `pc.py`: async aiohttp clients for the ambient player (catalog, play, patch, stop, status) and coordinator
@@ -116,17 +118,19 @@ which removes the coordinator's `ambient_stop_url` and fixes the original loopba
 `keyboard.py`: ESP32 `/type`, `/key` with `X-HomeHub-Key` (cleartext; documented limitation).
 
 ### Sleep timer (feature 2)
-`ambience_sleep_timer(minutes | 0 to cancel)`: at expiry fades both layers' volume to 0 over 60 s
-(TV page: client-side ramp; PC: `PATCH /v2/state` steps), then runs the normal mode stop (media stop, flicker
-cancel, light restore). Exposed as `sensor.homehub_ambience_sleep_timer` (device_class `timestamp`, the end time)
-and timer chips (15/30/60/90) in the Ambience tab.
+`ambience_sleep_timer(minutes | 0 to cancel)`: fades both layers' volume to 0 during the last 60 s before the
+end time (TV page: client-side ramp; PC: `PATCH /v2/state` steps), then at the end time runs the normal mode stop
+(media stop, flicker cancel, light restore). Exposed as `sensor.homehub_media_ambience_sleep_timer` (device_class
+`timestamp`, the end time) and timer chips (15/30/60/90) in the Ambience tab.
 
 ### Now Playing strip (feature 3)
 Library pollers also read active sessions (Plex `/status/sessions`, Jellyfin `/Sessions`) every 10 s while any
 server is configured; optional "player name contains" filter (default: all sessions of the configured user).
-The card shows artwork, title, progress and play/pause/±30 s. Controls send TV keys (`KEY_PLAY`/`KEY_PAUSE`/
-`KEY_FF`/`KEY_REWIND`), which work in any app, so no per-client remote-control protocol is needed.
-Also exposed as `sensor.homehub_now_playing` (state = title, attributes = server, progress, image).
+The card shows artwork, title, progress and play/pause/rewind/fast-forward. Controls send the `remote` service's
+`play`/`pause`/`rewind`/`fast_forward` to the current activity's device (TV: `KEY_PLAY`/`KEY_PAUSE`/`KEY_REWIND`/
+`KEY_FF`), so no per-client remote-control protocol is needed.
+Also exposed as `sensor.homehub_media_now_playing` (state = title, attributes = server, player, subtitle, state,
+position, duration; no image, since its URL is signed per caller).
 
 ### Time-of-day ambience (feature 4)
 Options: daypart start times (morning / afternoon / evening / night) → mode per daypart, and an
@@ -134,7 +138,7 @@ Options: daypart start times (morning / afternoon / evening / night) → mode pe
 (the card's **Auto** tile calls it). Idle auto-start (switch on) fires when, for N minutes, the TV is on in the
 "TV apps" activity with no ambience, no Plex/Jellyfin session and no HomeHub command; if a current-app entity is
 configured, it must also report the home screen / no app.
-Entity: `switch.homehub_auto_ambience`.
+Entity: `switch.homehub_media_auto_ambience`.
 
 ### Blueprints (feature 5)
 `blueprints/automation/homehub_media/`: *stop ambience when the TV switches to an app or input*,
@@ -145,34 +149,40 @@ Entity: `switch.homehub_auto_ambience`.
 - Options section **Assistant**: provider **Ollama** (base URL, no key), **OpenAI** (API key), or **Claude**
   (Anthropic API key); model dropdown filled live from the provider (Ollama `/api/tags`, OpenAI `models.list`,
   Anthropic `models.list`); key validated in the flow. Claude default model `claude-opus-5-5`.
-- Tools are defined once as an `llm.API` ("HomeHub Media"): launch_app, send_key, set_activity,
-  ambience_start/stop/auto, sleep_timer, set_quiet_mode, play_library_item (search by title), now_playing.
+- Tools are defined once as an `llm.API` (id `homehub_media_tools`, name "HomeHub Media"): `LaunchApp`, `Remote`
+  (logical remote command to the current activity; replaces a raw `send_key` tool), `SetActivity`,
+  `AmbienceStart` (only when modes exist; enum of mode ids), `AmbienceStop`, `AmbienceAuto`, `SleepTimer`,
+  `SetQuietMode`, `PlayLibraryItem` (search by title in continue watching / recently added), `NowPlaying`.
   Registering the API also lets the core Ollama/OpenAI/Anthropic conversation agents use these tools.
-- `conversation.homehub_assistant` entity: selectable in Settings → Voice assistants. It runs a minimal
-  non-streaming tool loop (max 5 rounds) against the chosen provider, using the official SDKs already shipped
-  with HA's core integrations (`anthropic`, `openai`; Ollama via its OpenAI-compatible `/v1` endpoint).
+- `conversation.homehub_media_assistant` entity: selectable in Settings → Voice assistants. It runs a minimal
+  non-streaming tool loop (max 5 rounds) against the chosen provider with the official SDKs (`anthropic`,
+  `openai`; Ollama via its OpenAI-compatible `/v1` endpoint). Only the chosen provider's SDK is installed, on
+  demand (`async_process_requirements` when the options flow connects and at entry setup), not as a manifest
+  requirement.
   Claude: `output_config.effort: "low"` for snappy voice replies, `tool_choice: auto`, server-side fallback
   (`fallbacks: "default"`), `stop_reason == "refusal"` handled with a spoken apology.
 - Least privilege: the tools control only HomeHub; library titles passed to the model are data, and every tool
   call goes through the same validated service handlers as the card.
 
 ### Services
-`homehub_media.` `send_key`, `launch_app`, `restart_app`, `send_text`, `pointer`, `set_activity`,
-`ambience_start`, `ambience_stop`, `ambience_update`, `ambience_auto`, `ambience_sleep_timer`, `save_mode`,
-`set_favorite`, `play_library_item`, `pc_open`, `pc_command`. All registered in `async_setup`, vol schemas with bounds, `ServiceValidationError`
-on bad input. Websocket commands for the card: `homehub_media/state` (subscribe), `homehub_media/catalog`,
-`homehub_media/library`.
+`homehub_media.` (K6, `api.py` / `services.yaml`): `remote`, `send_key`, `launch_app`, `restart_app`, `send_text`,
+`keyboard_key`, `pointer`, `set_activity`, `channel`, `ambience_start`, `ambience_stop`, `ambience_update`,
+`save_mode`, `set_favorite`, `ambience_auto`, `ambience_sleep_timer`, `refresh_catalog`, `rescan_apps`,
+`play_library_item`, `pc_open`, `pc_close` (`remote` with a `target` replaces the planned `pc_command`).
+All registered in `async_setup`, vol schemas with bounds, `ServiceValidationError` on bad input. Websocket
+commands for the card: `homehub_media/subscribe`, `homehub_media/catalog`, `homehub_media/library`.
 
 ### Entities
-`select.homehub_ambience_mode` (Off + modes), `select.homehub_activity`, `switch.homehub_quiet_mode`,
-`switch.homehub_auto_ambience`, `sensor.homehub_ambience_sleep_timer`, `sensor.homehub_now_playing`,
-`conversation.homehub_assistant` (when an assistant provider is configured).
+One device, "HomeHub Media" (`has_entity_name` + translation keys), so every id is `homehub_media_*`:
+`select.homehub_media_ambience_mode` (Off + modes), `select.homehub_media_activity`,
+`switch.homehub_media_quiet_mode`, `switch.homehub_media_auto_ambience`, `sensor.homehub_media_ambience_sleep_timer`,
+`sensor.homehub_media_now_playing`, `conversation.homehub_media_assistant` (when an assistant provider is configured).
 Everything else that was an input_* helper becomes internal state or card-local UI state.
 
 ### Card (`homehub-media-card`)
 Single vanilla web component, no build step, no third-party card dependencies, HA theme variables
 (light/dark), `getGridOptions` for sections views, visual editor not required (YAML config: `drawer: true`,
-`tabs: [...]`). Tabs shown only for configured targets:
+`tabs: [...]`, plus `default_tab` and `target` as built). Tabs shown only for configured targets:
 - **Remote:** target pills (TV / Streaming box / Media PC), power/home/back, D-pad (swipe + tap), volume/mute,
   play/pause, app grid with brand glyphs, keyboard field (TV IME, PC coordinator, or ESP32), touchpad pointer
   (TV when pointer active, PC always), streaming-box channel keypad with 1.5 s debounce.
