@@ -392,8 +392,26 @@ async def test_dayparts_ambience_apps(hass, entry):
     assert entry.options["dayparts"]["morning"] == {"start": "07:30", "mode": "chill"}
     assert entry.options["dayparts"]["afternoon"] == {"start": "12:00", "mode": None}
     assert entry.options["dayparts"]["idle_minutes"] == 15
-    assert entry.options["ambience"] == {"backend": "tv", "radio": {"jazz": "https://x.example/a?b=1"}}
+    assert entry.options["ambience"] == {"backend": "tv", "radio": {"jazz": "https://x.example/a?b=1"}, "youtube": {}}
     assert entry.options["apps"] == {"enabled": ["netflix", "youtube"], "ids": {"netflix": "3201907018807"}}
+
+
+async def test_ambience_youtube_videos(hass, entry):
+    result = await _open(hass, entry, "ambience")
+    result = await _submit(hass, result, {"backend": "tv", "youtube": "Rain=https://example.com/watch?v=B5unCXpegAw"})
+    assert result["errors"] == {"youtube": "invalid_youtube"}
+    result = await _submit(hass, result, {"backend": "tv", "youtube": "no equals sign", "radio": "jazz"})
+    assert result["errors"] == {"youtube": "invalid_youtube", "radio": "invalid_url"}
+    lines = [f"Video {i}=https://youtu.be/B5unCXpeg{i:02d}" for i in range(30, 0, -1)]
+    lines.insert(3, "Star night = https://www.youtube.com/watch?v=B5unCXpegAw&pp=ygUKc3RhciBuaWdodA%3D%3D")
+    result = await _submit(hass, result, {"backend": "tv", "youtube": "\n".join(lines) + "\n\n"})
+    await _save(hass, result)
+    youtube = entry.options["ambience"]["youtube"]
+    assert list(youtube) == [line.partition("=")[0].strip() for line in lines]  # every line, in order
+    assert youtube["Star night"] == "https://www.youtube.com/watch?v=B5unCXpegAw&pp=ygUKc3RhciBuaWdodA%3D%3D"
+    result = await _open(hass, entry, "ambience")
+    assert _schema(result, "youtube")[0].splitlines()[3] == (
+        "Star night=https://www.youtube.com/watch?v=B5unCXpegAw&pp=ygUKc3RhciBuaWdodA%3D%3D")
 
 
 async def test_apps_keep_discovered_and_rescan_fills_it(hass):

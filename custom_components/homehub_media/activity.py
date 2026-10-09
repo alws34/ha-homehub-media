@@ -82,7 +82,7 @@ class ActivityManager:
             return True
         cold = not self.is_on()
         box_on = [self._svc("remote", "turn_on", self._opt(OPT_BOX)["remote"])] if activity == "box" else []
-        await asyncio.gather(self._power_on(), *box_on)
+        await asyncio.gather(self.power_on(), *box_on)
         await self._until(self.is_on, POWER_WAIT_SECS)
         if cold:
             await asyncio.sleep(SETTLE_SECS)
@@ -129,7 +129,7 @@ class ActivityManager:
         st = self.hass.states.get(self._opt(OPT_TV).get("entity") or "")  # a configured entity is the truth
         return st.state not in OFF_STATES if st else self._hub.tv.available
 
-    async def _power_on(self) -> None:
+    async def power_on(self) -> None:
         entity = self._opt(OPT_TV).get("entity")
         st = self.hass.states.get(entity) if entity else None
         if st and st.attributes.get("supported_features", 0) & MediaPlayerEntityFeature.TURN_ON:

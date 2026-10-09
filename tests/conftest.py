@@ -23,7 +23,7 @@ async def setup_entry(hass, tmp_path):
     entry.add_to_hass(hass)
     with patch("custom_components.homehub_media.hub.SamsungTV", autospec=True) as tv_cls:
         tv = tv_cls.return_value
-        tv.token, tv.available, tv.keyboard_active, tv.pointer_active = "t", True, False, False
+        tv.token, tv.available, tv.keyboard_active, tv.pointer_active, tv.mac = "t", True, False, False, None
         tv.discover_apps.return_value = {"youtube": "111299001912"}
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done(wait_background_tasks=True)

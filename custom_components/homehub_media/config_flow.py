@@ -490,21 +490,26 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
     async def async_step_ambience(self, user_input: dict | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                radio = _pairs(user_input.get("radio", ""), "\n")
-                catalog.radio_items(radio)
-            except ValueError:
-                errors["radio"] = "invalid_url"
-            else:
-                return self._set(OPT_AMBIENCE, {"backend": user_input["backend"], "radio": radio})
+            value = {"backend": user_input["backend"]}
+            for key, check, error in (("radio", catalog.radio_items, "invalid_url"),
+                                      ("youtube", catalog.youtube_items, "invalid_youtube")):
+                try:
+                    value[key] = _pairs(user_input.get(key, ""), "\n")
+                    check(value[key])
+                except ValueError:
+                    errors[key] = error
+            if not errors:
+                return self._set(OPT_AMBIENCE, value)
         ambience = self._section(OPT_AMBIENCE)
         schema = vol.Schema({
             vol.Required("backend"): _select(["tv", "pc"] if self._options.get(OPT_PC) else ["tv"],
                                              translation_key="backend"),
             vol.Optional("radio"): TextSelector(TextSelectorConfig(multiline=True)),
+            vol.Optional("youtube"): TextSelector(TextSelectorConfig(multiline=True)),
         })
-        return self._form("ambience", schema, user_input or {"backend": ambience.get("backend", "tv"),
-                                                             "radio": _join(ambience.get("radio") or {}, "\n")}, errors)
+        return self._form("ambience", schema, user_input or {
+            "backend": ambience.get("backend", "tv"), "radio": _join(ambience.get("radio") or {}, "\n"),
+            "youtube": _join(ambience.get("youtube") or {}, "\n")}, errors)
 
     def _modes(self) -> list[dict]:
         return self._options.get(OPT_MODES) or deepcopy(DEFAULT_MODES)

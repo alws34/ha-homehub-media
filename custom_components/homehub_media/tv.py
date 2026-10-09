@@ -15,6 +15,7 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from samsungtvws import async_connection
 from samsungtvws.async_remote import SamsungTVWSAsyncRemote
 from samsungtvws.exceptions import ConnectionFailure, UnauthorizedError
 from samsungtvws.remote import (
@@ -26,13 +27,18 @@ from samsungtvws.remote import (
 )
 from websockets.exceptions import WebSocketException
 
+from .catalog import YT_ID_RE
 from .const import APP_CATALOG, CLIENT_NAME, TEXT_MAX
 
 KEY_RE = re.compile(r"KEY_[A-Z0-9_]{1,32}")
 APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
-REST_TIMEOUT = aiohttp.ClientTimeout(total=5)
+REST_TIMEOUT = aiohttp.ClientTimeout(total=5)  # REST (8001) and DIAL (8080)
 WS_ERRORS = (ConnectionFailure, WebSocketException, OSError)
-ACK_TIMEOUT = 3  # s to wait for the TV's ed.apps.launch reply
+URL_VISIBLE_SECS = 5  # wait for the browser to come to the front after a URL launch
+# ponytail: calibration knobs. A cold YouTube start shows the "who's watching" picker, whose timing varies.
+YT_COLD_WAIT = 8  # s from the first DIAL launch to the OK that picks the profile
+YT_WARM_WAIT = 3  # s from a DIAL launch to the OK that enters fullscreen
+YT_ORIGIN = "package:com.google.android.youtube"  # without it the TV's DIAL server answers 403
 _LOGGER = logging.getLogger(__name__)
 FLAGS = {  # TV event -> (attribute, value)
     "ms.remote.imeStart": ("keyboard_active", True),
@@ -41,6 +47,22 @@ FLAGS = {  # TV event -> (attribute, value)
     "ms.remote.touchEnable": ("pointer_active", True),
     "ms.remote.touchDisable": ("pointer_active", False),
 }
+# ponytail: while its browser is open the TV sends touch events before ms.channel.connect; samsungtvws then fails
+# the connect (and leaks the socket). Drop this once samsungtvws ignores them itself.
+async_connection.IGNORE_EVENTS_AT_STARTUP = (
+    *async_connection.IGNORE_EVENTS_AT_STARTUP, "ms.remote.touchEnable", "ms.remote.touchDisable")
+
+
+class TVRemote(SamsungTVWSAsyncRemote):
+    """Hands every TV event to `on_event`, including those that arrive before the connect reply."""
+
+    def __init__(self, *args: Any, on_event: Callable[[str], None], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._on_tv_event = on_event
+
+    def _websocket_event(self, event: str, response: dict[str, Any]) -> None:  # startup and listen loop alike
+        super()._websocket_event(event, response)
+        self._on_tv_event(event)
 
 
 class PairingDenied(HomeAssistantError):
@@ -78,8 +100,6 @@ class SamsungTV:
         self.browser_id = APP_CATALOG["browser"]["ids"][0]  # replaced by discover_apps()
         self._remote: SamsungTVWSAsyncRemote | None = None
         self._lock = asyncio.Lock()
-        self._launch_lock = asyncio.Lock()  # one launch at a time so each reply matches its request
-        self._ack: asyncio.Future | None = None
         self._text_sent = False
 
     def _notify(self) -> None:
@@ -94,11 +114,8 @@ class SamsungTV:
             setattr(self, attr, value)
             self._notify()
 
-    def _on_event(self, event: str, response: Any) -> None:
-        if event == "ed.apps.launch":
-            if self._ack and not self._ack.done():
-                self._ack.set_result(response.get("data"))
-        elif flag := FLAGS.get(event):
+    def _on_event(self, event: str) -> None:
+        if flag := FLAGS.get(event):
             if flag[0] == "keyboard_active":
                 self._text_sent = False  # new IME session: broadcast textReceived again
             self._set_flag(*flag)
@@ -109,11 +126,10 @@ class SamsungTV:
                 if self._remote is None or not self._remote.is_alive():
                     if self._remote is not None:  # socket died since the last command
                         self._set_flag("available", False)
-                    self._remote = SamsungTVWSAsyncRemote(
-                        self.host, token=self.token, port=self.port, timeout=5, key_press_delay=0,
-                        name=CLIENT_NAME)
+                    self._remote = TVRemote(self.host, token=self.token, port=self.port, timeout=5, key_press_delay=0,
+                                            name=CLIENT_NAME, on_event=self._on_event)
                     async with asyncio.timeout(10):
-                        await self._remote.start_listening(self._on_event)  # opens the socket itself
+                        await self._remote.start_listening()  # opens the socket itself
                     if self._remote.token != self.token:  # TV rotated the token; Hub persists it
                         self.token = self._remote.token
                         self._notify()
@@ -173,28 +189,82 @@ class SamsungTV:
         await self._send(*(SendRemoteKey.hold(key, hold_secs) if hold_secs else [SendRemoteKey.click(key)]))
 
     async def launch(self, app_id: str, meta_tag: str = "", action_type: str = "DEEP_LINK") -> None:
+        """REST first (fast); the WebSocket for a metaTag or when REST itself fails. The TV never replies to a
+        WebSocket launch (verified on Tizen 6.5), so that one is fire-and-forget."""
         path = _app_path(app_id)
-        async with self._launch_lock:
-            ack = self._ack = self.hass.loop.create_future()
-            await self._send(ChannelEmitCommand.launch_app(app_id, action_type, meta_tag))
-            with contextlib.suppress(TimeoutError):
-                async with asyncio.timeout(ACK_TIMEOUT):
-                    if str(await ack) == "200":
-                        return
-        # no or negative ack: REST can't carry a metaTag, so only plain launches fall back to it
-        if meta_tag or await self._rest("POST", path) is None:
-            raise HomeAssistantError(f"TV did not launch {app_id}")
+        if not meta_tag:
+            try:
+                launched = await self._rest("POST", path)
+            except HomeAssistantError:  # REST down or erroring: the WebSocket may still work
+                pass
+            else:
+                if launched is None:
+                    raise ServiceValidationError(f"{app_id} is not installed on the TV")
+                return
+        await self._send(ChannelEmitCommand.launch_app(app_id, action_type, meta_tag))
+
+    async def app_info(self, app_id: str) -> dict | None:
+        """REST app status ({"running": bool, "visible": bool, ...}); None when not installed."""
+        return await self._rest("GET", _app_path(app_id))
 
     async def open_url(self, url: str) -> None:
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.netloc or len(url) > 2048:
             raise ServiceValidationError("Only http(s) URLs up to 2048 characters can be opened")
-        try:  # Which of the two works on Tizen 6.5 is confirmed live (Task 17); keep both.
-            await self.launch("org.tizen.browser", url, "NATIVE_LAUNCH")
-        except (CannotConnect, PairingDenied):
-            raise
-        except HomeAssistantError:
-            await self.launch(self.browser_id, url)
+        await self.launch("org.tizen.browser", url, "NATIVE_LAUNCH")
+        # 2021+ Samsung TVs start the browser hidden for a remote URL launch, so nothing shows
+        for _ in range(URL_VISIBLE_SECS * 2):
+            await asyncio.sleep(0.5)
+            if (await self.app_info(self.browser_id) or {}).get("visible"):
+                return
+        raise HomeAssistantError("This TV does not allow opening web pages remotely")
+
+    # ---- YouTube over DIAL (port 8080) -----------------------------------------------------------------
+
+    async def _dial(self, method: str, data: str | None = None, run: bool = False) -> tuple[int, str]:
+        url = f"http://{self.host}:8080/ws/apps/YouTube{'/run' if run else ''}"
+        headers = {"Origin": YT_ORIGIN, "Content-Type": "text/plain; charset=utf-8"}
+        try:
+            async with async_get_clientsession(self.hass).request(
+                method, url, data=data, headers=headers, timeout=REST_TIMEOUT
+            ) as resp:
+                return resp.status, await resp.text()
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            raise CannotConnect("TV is off or unreachable") from err
+
+    async def youtube_state(self) -> str:
+        """"running", "stopped", or "unknown" (unreachable, or another DIAL state)."""
+        try:
+            status, body = await self._dial("GET")
+        except CannotConnect:
+            return "unknown"
+        state = re.search(r"<state>\s*([a-z]+)\s*</state>", body) if status == 200 else None
+        return state[1] if state and state[1] in ("running", "stopped") else "unknown"
+
+    async def _youtube_post(self, video_id: str) -> None:
+        status, _ = await self._dial("POST", f"v={video_id}&t=0")
+        if status not in (200, 201):  # 201: started, 200: already running
+            raise HomeAssistantError(f"TV did not start YouTube (HTTP {status})")
+
+    async def play_youtube(self, video_id: str) -> None:
+        """Play a video fullscreen; a cold start first passes the profile picker with one OK."""
+        if not YT_ID_RE.fullmatch(video_id):
+            raise ServiceValidationError("Invalid YouTube video id")
+        cold = await self.youtube_state() != "running"
+        await self._youtube_post(video_id)
+        if cold:
+            await asyncio.sleep(YT_COLD_WAIT)
+            await self.send_key("KEY_ENTER")  # picks the highlighted profile
+            await self._youtube_post(video_id)
+        await asyncio.sleep(YT_WARM_WAIT)
+        await self.send_key("KEY_ENTER")  # player overlay -> fullscreen
+
+    async def stop_youtube(self, app_id: str) -> None:
+        """Close YouTube over DIAL; REST (YouTube's Tizen `app_id`) when DIAL fails."""
+        with contextlib.suppress(CannotConnect):
+            if (await self._dial("DELETE", run=True))[0] in (200, 204, 404):  # 404: not running
+                return
+        await self._rest("DELETE", _app_path(app_id))
 
     async def restart_app(self, app_id: str) -> None:
         path = _app_path(app_id)

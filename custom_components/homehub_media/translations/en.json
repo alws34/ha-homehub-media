@@ -232,14 +232,16 @@
       },
       "ambience": {
         "title": "Ambience",
-        "description": "Where ambience plays, and internet radio stations to use as soundtracks.",
+        "description": "Where ambience plays, internet radio stations to use as soundtracks, and YouTube videos to use as visuals. Samsung TVs from 2021 on do not let Home Assistant open the browser player, so local video files cannot play on those TVs: use YouTube videos, or play ambience on a media PC.",
         "data": {
           "backend": "Play ambience on",
-          "radio": "Radio stations"
+          "radio": "Radio stations",
+          "youtube": "YouTube videos"
         },
         "data_description": {
           "backend": "The media PC is offered once it is set up.",
-          "radio": "One station per line as id=stream address, for example jazz=(the station's HTTPS stream address). Only HTTPS addresses are accepted. IDs use lowercase letters, digits, - and _."
+          "radio": "One station per line as id=stream address, for example jazz=(the station's HTTPS stream address). Only HTTPS addresses are accepted. IDs use lowercase letters, digits, - and _.",
+          "youtube": "One video per line as Name=YouTube link, for example Fireplace= followed by the video's watch, share or Shorts link, or just its 11-character video ID. The name is the title in the card. YouTube videos play in the TV's YouTube app, also when ambience plays on the media PC."
         }
       },
       "modes": {
@@ -386,7 +388,8 @@
       "mode_exists": "A mode with this name already exists.",
       "invalid_name": "Enter a name. A new mode cannot be called Off.",
       "invalid_client": "App names use lowercase letters, digits and underscores only, for example jellyfin or prime_video.",
-      "secret_required": "Enter this token or key. A saved one is only reused while the address and port (or the assistant provider) stay the same."
+      "secret_required": "Enter this token or key. A saved one is only reused while the address and port (or the assistant provider) stay the same.",
+      "invalid_youtube": "Enter one Name=YouTube link per line. The link must be a YouTube video (watch, share, Shorts or live link) or an 11-character video ID."
     }
   },
   "selector": {
@@ -562,6 +565,16 @@
         }
       }
     },
+    "set_volume": {
+      "name": "Set volume",
+      "description": "Sets the TV volume through the TV media player from Configure › TV.",
+      "fields": {
+        "level": {
+          "name": "Level",
+          "description": "Volume (0-100)."
+        }
+      }
+    },
     "set_activity": {
       "name": "Set activity",
       "description": "Switches between off, the TV, the streaming box and the media PC.",
@@ -639,6 +652,10 @@
         "soundtrack_volume": {
           "name": "Soundtrack volume",
           "description": "Volume of the soundtrack (0-100)."
+        },
+        "visuals": {
+          "name": "Random visuals",
+          "description": "IDs of videos to pick from at random each time the mode starts. Empty uses the visual."
         }
       }
     },
@@ -685,6 +702,10 @@
         "soundtrack_volume": {
           "name": "Soundtrack volume",
           "description": "Volume of the soundtrack (0-100)."
+        },
+        "visuals": {
+          "name": "Random visuals",
+          "description": "IDs of videos to pick from at random each time the mode starts. Empty uses the visual."
         }
       }
     },
