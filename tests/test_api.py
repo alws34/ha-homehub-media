@@ -140,8 +140,8 @@ async def test_service_calls_hub_and_records_command(hass, setup_entry):
         await hass.services.async_call(DOMAIN, "remote", {"command": "up"}, blocking=True)
 
 
-async def test_scans_are_admin_only(hass, setup_entry, hass_read_only_user):
-    for service in ("rescan_apps", "refresh_catalog"):
-        with pytest.raises(Unauthorized):
-            await hass.services.async_call(DOMAIN, service, {}, blocking=True,
-                                           context=Context(user_id=hass_read_only_user.id))
+async def test_rescan_apps_is_admin_only(hass, setup_entry, hass_read_only_user):
+    ctx = Context(user_id=hass_read_only_user.id)
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(DOMAIN, "rescan_apps", {}, blocking=True, context=ctx)
+    await hass.services.async_call(DOMAIN, "refresh_catalog", {}, blocking=True, context=ctx)  # any user

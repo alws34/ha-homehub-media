@@ -114,7 +114,12 @@
   function tick() {
     var ac = new AbortController(), to = setTimeout(function () { ac.abort(); }, 10000); // a hung request must not stall polling
     fetch(next, { cache: "no-store", redirect: "error", signal: ac.signal })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (r) {
+        // 401/403/404: this session was replaced, revoked or HA restarted -> go black and stop polling
+        if (r.status === 401 || r.status === 403 || r.status === 404) { apply({ stop: true }); next = null; return null; }
+        if (!r.ok) throw new Error(r.status);
+        return r.json();
+      })
       .then(function (st) {
         fails = 0;
         if (!st || typeof st.version !== "number") return;
@@ -122,7 +127,7 @@
         if (st.version !== ver) { ver = st.version; apply(st); }
       })
       .catch(function () { fails++; }) // keep playing; back off 2 s, 4 s, 8 s, then 10 s
-      .then(function () { clearTimeout(to); setTimeout(tick, fails ? Math.min(10000, 1000 * Math.pow(2, fails)) : 1000); });
+      .then(function () { clearTimeout(to); if (next) setTimeout(tick, fails ? Math.min(10000, 1000 * Math.pow(2, fails)) : 1000); });
   }
   if (next && sameOrigin(next)) tick();
 
