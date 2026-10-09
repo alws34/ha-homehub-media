@@ -329,6 +329,9 @@ class SamsungTV:
             except (*LOUNGE_ERRORS, HomeAssistantError) as exc:
                 err = exc
             _LOGGER.debug("YouTube start attempt failed: %r", err)
+            # a session opened before a cold-started app was ready stays "connected" but ignores plays: open a new one
+            async with self._yt_lock:
+                await self._drop_lounge()
             if time.monotonic() > deadline:
                 raise HomeAssistantError("YouTube on the TV did not start the video") from err
             await asyncio.sleep(1)
@@ -341,15 +344,20 @@ class SamsungTV:
         except (*LOUNGE_ERRORS, HomeAssistantError) as err:
             _LOGGER.debug("YouTube lounge reconnect failed: %r", err)
 
+    async def _drop_lounge(self) -> None:
+        """End the lounge session (caller holds _yt_lock); the next _lounge() opens a new one."""
+        api, self._yt_api = self._yt_api, None
+        if self._yt_sub:
+            self._yt_sub.cancel()
+        if api and api.connected():
+            with contextlib.suppress(*LOUNGE_ERRORS):
+                await api.disconnect()
+
     async def stop_youtube(self, app_id: str) -> None:
         """End the lounge session, then close YouTube over DIAL; REST (YouTube's Tizen `app_id`) when DIAL fails."""
         async with self._yt_lock:
-            self._yt_video, api, self._yt_api = None, self._yt_api, None
-            if self._yt_sub:
-                self._yt_sub.cancel()
-            if api and api.connected():
-                with contextlib.suppress(*LOUNGE_ERRORS):
-                    await api.disconnect()
+            self._yt_video = None
+            await self._drop_lounge()
         with contextlib.suppress(CannotConnect):
             if (await self._dial("DELETE", run=True))[0] in (200, 204, 404):  # 404: not running
                 return
