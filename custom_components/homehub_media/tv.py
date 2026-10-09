@@ -1,0 +1,257 @@
+"""Samsung Tizen TV client: WebSocket remote (8002), REST (8001), Wake-on-LAN."""
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import re
+import socket
+import unicodedata
+from collections.abc import Callable
+from typing import Any
+from urllib.parse import urlsplit
+
+import aiohttp
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from samsungtvws.async_remote import SamsungTVWSAsyncRemote
+from samsungtvws.exceptions import ConnectionFailure, UnauthorizedError
+from samsungtvws.remote import (
+    ChannelEmitCommand,
+    RemoteControlCommand,
+    SendInputEnd,
+    SendInputString,
+    SendRemoteKey,
+)
+from websockets.exceptions import WebSocketException
+
+from .const import APP_CATALOG, CLIENT_NAME, TEXT_MAX
+
+KEY_RE = re.compile(r"KEY_[A-Z0-9_]{1,32}")
+APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+REST_TIMEOUT = aiohttp.ClientTimeout(total=5)
+WS_ERRORS = (ConnectionFailure, WebSocketException, OSError)
+ACK_TIMEOUT = 3  # s to wait for the TV's ed.apps.launch reply
+_LOGGER = logging.getLogger(__name__)
+FLAGS = {  # TV event -> (attribute, value)
+    "ms.remote.imeStart": ("keyboard_active", True),
+    "ms.remote.imeEnd": ("keyboard_active", False),
+    "ms.remote.imeDone": ("keyboard_active", False),
+    "ms.remote.touchEnable": ("pointer_active", True),
+    "ms.remote.touchDisable": ("pointer_active", False),
+}
+
+
+class PairingDenied(HomeAssistantError):
+    """The TV did not allow this client (no or revoked token)."""
+
+
+class CannotConnect(HomeAssistantError):
+    """The TV is off or unreachable."""
+
+
+def _app_path(app_id: str) -> str:
+    if not APP_ID_RE.fullmatch(app_id):
+        raise ServiceValidationError("Invalid app id")
+    return f"applications/{app_id}"
+
+
+def _wol(mac: str) -> None:
+    """Broadcast a Wake-on-LAN magic packet (blocking)."""
+    raw = bytes.fromhex(re.sub(r"[:.-]", "", mac))
+    if len(raw) != 6:
+        raise ValueError("MAC address must be 6 bytes")
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.sendto(b"\xff" * 6 + raw * 16, ("255.255.255.255", 9))
+
+
+class SamsungTV:
+    """Single client for one TV; the WebSocket is opened lazily and reopened when dead."""
+
+    def __init__(self, hass: HomeAssistant, host: str, token: str | None, mac: str | None,
+                 port: int = 8002, on_change: Callable[[], None] | None = None) -> None:
+        self.hass, self.host, self.token, self.mac, self.port = hass, host, token, mac, port
+        self._on_change = on_change
+        self.available = self.keyboard_active = self.pointer_active = False
+        self.browser_id = APP_CATALOG["browser"]["ids"][0]  # replaced by discover_apps()
+        self._remote: SamsungTVWSAsyncRemote | None = None
+        self._lock = asyncio.Lock()
+        self._launch_lock = asyncio.Lock()  # one launch at a time so each reply matches its request
+        self._ack: asyncio.Future | None = None
+        self._text_sent = False
+
+    def _notify(self) -> None:
+        if self._on_change:
+            try:
+                self._on_change()
+            except Exception:  # a listener bug must not kill the WebSocket receive task
+                _LOGGER.exception("TV change listener failed")
+
+    def _set_flag(self, attr: str, value: bool) -> None:
+        if getattr(self, attr) != value:
+            setattr(self, attr, value)
+            self._notify()
+
+    def _on_event(self, event: str, response: Any) -> None:
+        if event == "ed.apps.launch":
+            if self._ack and not self._ack.done():
+                self._ack.set_result(response.get("data"))
+        elif flag := FLAGS.get(event):
+            if flag[0] == "keyboard_active":
+                self._text_sent = False  # new IME session: broadcast textReceived again
+            self._set_flag(*flag)
+
+    async def _send(self, *commands: Any) -> None:
+        async with self._lock:
+            try:
+                if self._remote is None or not self._remote.is_alive():
+                    if self._remote is not None:  # socket died since the last command
+                        self._set_flag("available", False)
+                    self._remote = SamsungTVWSAsyncRemote(
+                        self.host, token=self.token, port=self.port, timeout=5, key_press_delay=0,
+                        name=CLIENT_NAME)
+                    async with asyncio.timeout(10):
+                        await self._remote.start_listening(self._on_event)  # opens the socket itself
+                    if self._remote.token != self.token:  # TV rotated the token; Hub persists it
+                        self.token = self._remote.token
+                        self._notify()
+                await self._remote.send_commands(list(commands))
+            except WS_ERRORS as err:
+                self._remote = None
+                self._set_flag("available", False)
+                if isinstance(err, UnauthorizedError):
+                    raise PairingDenied("The TV refused the token, pair again") from err
+                raise CannotConnect("TV is off or unreachable") from err
+        self._set_flag("available", True)
+
+    async def _rest(self, method: str, path: str = "") -> Any:
+        """None on 404; parsed JSON for GET, True for other methods."""
+        try:
+            async with async_get_clientsession(self.hass).request(
+                method, f"http://{self.host}:8001/api/v2/{path}", timeout=REST_TIMEOUT
+            ) as resp:
+                if resp.status == 404:
+                    return None
+                if resp.status >= 400:
+                    raise HomeAssistantError(f"TV returned HTTP {resp.status}")
+                return await resp.json(content_type=None) if method == "GET" else True
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            raise CannotConnect("TV is off or unreachable") from err
+
+    async def pair(self) -> str:
+        try:
+            async with (
+                asyncio.timeout(31),
+                SamsungTVWSAsyncRemote(self.host, port=self.port, timeout=31, name=CLIENT_NAME) as remote,
+            ):
+                await remote.open()
+                token = remote.token
+        except (ConnectionFailure, WebSocketException) as err:
+            raise PairingDenied("Pairing was not allowed on the TV") from err
+        except OSError as err:  # includes TimeoutError
+            raise CannotConnect("TV is off or unreachable") from err
+        if not token:
+            raise PairingDenied("The TV did not issue a token")
+        self.token = token
+        return token
+
+    async def device_info(self) -> dict:
+        """REST device info; also refreshes `available` (REST answers in standby, so use PowerState)."""
+        try:
+            device = (await self._rest("GET"))["device"]
+        except (CannotConnect, TypeError, KeyError) as err:
+            self._set_flag("available", False)
+            raise CannotConnect("TV is off or unreachable") from err
+        self._set_flag("available", device.get("PowerState", "on") == "on")
+        return device
+
+    async def send_key(self, key: str, hold_secs: float = 0) -> None:
+        if not KEY_RE.fullmatch(key) or not 0 <= hold_secs <= 10:
+            raise ServiceValidationError("Invalid TV key or hold time")
+        await self._send(*(SendRemoteKey.hold(key, hold_secs) if hold_secs else [SendRemoteKey.click(key)]))
+
+    async def launch(self, app_id: str, meta_tag: str = "", action_type: str = "DEEP_LINK") -> None:
+        path = _app_path(app_id)
+        async with self._launch_lock:
+            ack = self._ack = self.hass.loop.create_future()
+            await self._send(ChannelEmitCommand.launch_app(app_id, action_type, meta_tag))
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(ACK_TIMEOUT):
+                    if str(await ack) == "200":
+                        return
+        # no or negative ack: REST can't carry a metaTag, so only plain launches fall back to it
+        if meta_tag or await self._rest("POST", path) is None:
+            raise HomeAssistantError(f"TV did not launch {app_id}")
+
+    async def open_url(self, url: str) -> None:
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.netloc or len(url) > 2048:
+            raise ServiceValidationError("Only http(s) URLs up to 2048 characters can be opened")
+        try:  # Which of the two works on Tizen 6.5 is confirmed live (Task 17); keep both.
+            await self.launch("org.tizen.browser", url, "NATIVE_LAUNCH")
+        except (CannotConnect, PairingDenied):
+            raise
+        except HomeAssistantError:
+            await self.launch(self.browser_id, url)
+
+    async def app_status(self, app_id: str) -> dict | None:
+        return await self._rest("GET", _app_path(app_id))
+
+    async def restart_app(self, app_id: str) -> None:
+        path = _app_path(app_id)
+        try:  # DELETE may 404/fail when the app isn't running; the POST below decides
+            await self._rest("DELETE", path)
+        except CannotConnect:
+            raise
+        except HomeAssistantError:
+            pass
+        await asyncio.sleep(0.7)
+        if await self._rest("POST", path) is None:
+            raise HomeAssistantError(f"App {app_id} is not installed")
+        for _ in range(10):
+            await asyncio.sleep(0.5)
+            if (await self._rest("GET", path) or {}).get("running"):
+                return
+        raise HomeAssistantError(f"App {app_id} did not restart")
+
+    async def discover_apps(self, catalog: dict = APP_CATALOG) -> dict[str, str]:
+        async def first_installed(ids: list[str]) -> str | None:
+            for app_id in ids:
+                if await self.app_status(app_id) is not None:
+                    return app_id
+            return None
+
+        found = await asyncio.gather(*(first_installed(app["ids"]) for app in catalog.values()))
+        apps = {key: app_id for key, app_id in zip(catalog, found) if app_id}
+        self.browser_id = apps.get("browser", self.browser_id)
+        return apps
+
+    async def send_text(self, text: str) -> None:
+        if not 0 < len(text) <= TEXT_MAX or any(unicodedata.category(c)[0] == "C" for c in text):
+            raise ServiceValidationError(f"Text must be 1-{TEXT_MAX} printable characters")
+        first = [] if self._text_sent else [ChannelEmitCommand.text_received()]
+        await self._send(*first, SendInputString.send(text), SendInputEnd())
+        self._text_sent = True
+
+    async def pointer_move(self, dx: float, dy: float) -> None:
+        x, y = (round(max(-500, min(500, d))) for d in (dx, dy))
+        await self._send(RemoteControlCommand(
+            {"Cmd": "Move", "Position": {"x": x, "y": y, "Time": "0"}, "TypeOfRemote": "ProcessMouseDevice"}))
+
+    async def pointer_click(self) -> None:
+        await self._send(RemoteControlCommand({"Cmd": "LeftClick", "TypeOfRemote": "ProcessMouseDevice"}))
+
+    async def wake(self) -> None:
+        if not self.mac:
+            return
+        try:
+            await self.hass.async_add_executor_job(_wol, self.mac)
+        except (ValueError, OSError) as err:
+            raise HomeAssistantError("Wake-on-LAN failed") from err
+
+    async def close(self) -> None:
+        if remote := self._remote:
+            self._remote = None
+            await remote.close()
