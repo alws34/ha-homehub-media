@@ -1,10 +1,10 @@
 import asyncio
 import time
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
@@ -167,17 +167,116 @@ async def test_tv_health_stops_when_page_is_gone(hass):
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=62))
     await hass.async_block_till_done()
     assert am.mode == "off" and on[-1].data["entity_id"] == "scene.homehub_media_snapshot"
+    assert call("KEY_HOME") not in am._hub.tv.send_key.await_args_list  # page gone: never HOME the user's app
 
 
 async def test_flicker_runs_and_is_cancelled_on_stop(hass):
-    async_mock_service(hass, "scene", "create"); lights = async_mock_service(hass, "light", "turn_on")
+    async_mock_service(hass, "scene", "create")
+    lights, called = [], asyncio.Event()
+
+    async def light_on(call):
+        lights.append(call.data); called.set()
+    hass.services.async_register("light", "turn_on", light_on)
     am = await manager(hass, chill(flicker=["light.f"], lights_only=True))
     await am.start("chill")
-    await asyncio.sleep(0)
-    assert lights[0].data == {"entity_id": ["light.f"], "brightness_pct": 24, "transition": 3.2}
+    await asyncio.wait_for(called.wait(), 1)
+    assert lights[0] == {"entity_id": ["light.f"], "brightness_pct": 24, "transition": 3.2}
     task = next(j for j in am._jobs if isinstance(j, asyncio.Task))
     await am.stop()
     assert task.cancelled() and am._jobs == []
+
+
+def three_modes(backend="tv"):
+    opts = chill(backend)
+    opts["modes"] = [{"id": m, "name": m, "icon": "mdi:a", "scene": scene, "flicker": [], "lights_only": False}
+                     for m, scene in (("a", "scene.a"), ("b", "scene.b"), ("c", None))]
+    return opts
+
+
+async def test_start_failure_restores_lights_and_sets_error(hass):
+    async_mock_service(hass, "scene", "create"); on = async_mock_service(hass, "scene", "turn_on")
+    hass.states.async_set("scene.a", "x", {"entity_id": ["light.a"]})
+    am = await manager(hass, three_modes())
+    am._hub.tv.open_url.side_effect = RuntimeError("boom")
+    with pytest.raises(HomeAssistantError):
+        await am.start("a")
+    assert am.mode == "off" and am.error == "Could not start ambience" and not am.uses_media
+    assert on[-1].data["entity_id"] == "scene.homehub_media_snapshot" and am._jobs == []
+
+
+async def test_switch_keeps_snapshot_and_swaps_tv_page_in_place(hass):
+    create = async_mock_service(hass, "scene", "create"); on = async_mock_service(hass, "scene", "turn_on")
+    hass.states.async_set("scene.a", "x", {"entity_id": ["light.a"]})
+    hass.states.async_set("scene.b", "x", {"entity_id": ["light.b"]})
+    am = await manager(hass, three_modes())
+    am._hub.activity.current = "tv"; am._hub.tv.available = True
+    await am.start("a")
+    v = am.page_version
+    await am.start("b")
+    assert len(create) == 1 and [c.data["entity_id"] for c in on] == ["scene.a", "scene.b"]
+    assert am.page_version > v and am.page_state()["stop"] is False and am.mode == "b"
+    am._hub.tv.open_url.assert_awaited_once()            # no reload, no HOME between modes
+    am._hub.tv.send_key.assert_not_awaited()
+    am._hub.activity.set.assert_not_awaited()
+    await am.start("c")  # no lighting: gives the room back
+    assert on[-1].data["entity_id"] == "scene.homehub_media_snapshot" and len(on) == 3
+    await am.stop()
+    assert len(on) == 3  # snapshot restored exactly once
+
+
+async def test_stale_health_check_cannot_stop_a_new_run(hass):
+    am = await manager(hass, three_modes("pc"))
+    am._hub.pc_ambient = pc = AsyncMock()
+    gate = asyncio.Event()
+
+    async def slow_status():
+        await gate.wait(); return {"state": "idle"}
+    pc.status.side_effect = slow_status
+    await am.start("c")
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))
+    await asyncio.sleep(0.05)                     # health check is now awaiting status()
+    await am.start("c", {"visual": "rain", "original_volume": 50})
+    gate.set(); await hass.async_block_till_done()
+    assert am.mode == "c" and am.uses_media
+    await am.stop()
+
+
+async def test_pc_health_idle_stops(hass):
+    am = await manager(hass, chill("pc"))
+    am._hub.pc_ambient = pc = AsyncMock()
+    pc.status.return_value = {"state": "idle"}
+    await am.start("chill")
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))
+    await hass.async_block_till_done()
+    assert am.mode == "off"
+    pc.stop.assert_awaited_once()
+
+
+async def test_pc_sleep_fades_in_six_patches_then_stops(hass):
+    am = await manager(hass, chill("pc"))
+    am._hub.pc_ambient = pc = AsyncMock()
+    pc.status.return_value = {"state": "playing"}
+    await am.start("chill")
+    await am.set_sleep_timer(1)  # fade starts right away (1 min - 60 s)
+    now = dt_util.utcnow()
+    for i in range(8):  # i=0 fires the fade timer; each later step wakes one 10 s fade sleep
+        async_fire_time_changed(hass, now + timedelta(seconds=11 * i))
+        await hass.async_block_till_done()
+        await asyncio.sleep(0)
+    assert [c.args[0] for c in pc.patch.await_args_list] == [{"video": {"volume": v}} for v in (16, 13, 10, 6, 3, 0)]
+    assert am.mode == "off"
+    pc.stop.assert_awaited_once()
+
+
+async def test_pc_refresh_rescans_and_maps_catalog(hass):
+    am = await manager(hass, chill("pc"))
+    am._hub.pc_ambient = pc = AsyncMock()
+    pc.catalog.return_value = {"visuals": [{"id": "fire", "kind": "video", "title": "Fire", "source_type": "file"},
+                                           {"id": "../evil", "title": "x"}], "soundtracks": []}
+    await am.refresh_catalog()
+    pc.refresh.assert_awaited_once()
+    assert am.catalog()["visuals"] == [{"id": "fire", "kind": "visual", "title": "Fire", "source_type": "file",
+                                        "live": False, "duration": None, "preview": None, "favorite": False}]
 
 
 async def test_refresh_catalog_tv_scans_and_strips_server_keys(hass, tmp_path):
