@@ -21,7 +21,11 @@ from .hub import Hub
 
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-PLATFORMS: list[Platform] = []  # Task 12 adds select, switch, sensor and conversation
+PLATFORMS = [Platform.SELECT, Platform.SWITCH, Platform.SENSOR]
+
+
+def _platforms(hub: Hub) -> list[Platform]:
+    return [*PLATFORMS, Platform.CONVERSATION] if hub.options.get(OPT_ASSISTANT) else PLATFORMS
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -45,9 +49,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await assistant.ensure_sdk(hass, cfg["provider"])
         except HomeAssistantError as err:
             _LOGGER.warning("Could not install the %s SDK: %s", cfg["provider"], err)
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await hass.config_entries.async_forward_entry_setups(entry, _platforms(hub))
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)  # then on_unload stops the hub
+    # then on_unload stops the hub
+    return await hass.config_entries.async_unload_platforms(entry, _platforms(entry.runtime_data))
