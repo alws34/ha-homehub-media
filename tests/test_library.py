@@ -143,19 +143,59 @@ async def test_jellyfin_art_proxy(hass, aioclient_mock):
     assert aioclient_mock.mock_calls[0][1].query["maxHeight"] == "450"
 
 
-async def test_plex_art_proxy_decodes_key_and_rejects_non_image(hass, aioclient_mock):
-    plex = PlexServer(hass, PLEX, "tok", None)
-    aioclient_mock.get(f"{PLEX}/library/metadata/1/thumb/2", content=b"img", headers=JPEG)
-    key = base64.urlsafe_b64encode(b"/library/metadata/1/thumb/2").decode().rstrip("=")
-    assert await plex.fetch_art(key) == (b"img", "image/jpeg")
-    query = aioclient_mock.mock_calls[0][1].query
-    assert (query["width"], query["height"]) == ("300", "450")
-    for bad in (b"/status/sessions", b"/library/../status/sessions", b"//evil.example/x", b"http://evil.example/x"):
-        with pytest.raises(ServiceValidationError):
-            await plex.fetch_art(base64.urlsafe_b64encode(bad).decode().rstrip("="))
-    aioclient_mock.get(f"{PLEX}/library/metadata/3/thumb/2", content=b"<html>", headers={"Content-Type": "text/html"})
+def _key(path: bytes) -> str:
+    return base64.urlsafe_b64encode(path).decode().rstrip("=")
+
+
+async def test_plex_art_goes_through_transcoder(hass, aioclient_mock):
+    aioclient_mock.get(f"{PLEX}/photo/:/transcode", content=b"img", headers=JPEG)
+    assert await PlexServer(hass, PLEX, "tok", None).fetch_art(_key(b"/library/metadata/1/thumb/2")) == (b"img", "image/jpeg")
+    method, url, _, headers = aioclient_mock.mock_calls[0]
+    assert (method, url.path) == ("GET", "/photo/:/transcode")
+    assert dict(url.query) == {"url": "/library/metadata/1/thumb/2", "width": "300", "height": "450",
+                               "minSize": "1", "upscale": "1"}
+    assert headers["X-Plex-Token"] == "tok" and headers["Accept"] == "image/*"
+
+
+@pytest.mark.parametrize("bad", [
+    b"/library/sections/all/refresh", b"/library/parts/1/2/file.mkv", b"/status/sessions",
+    b"/library/../status/sessions", b"/library/metadata/1/thumb/2/../../x", b"/library/metadata/1/thumb/2\n",
+    b"/library/metadata/x/thumb/2", b"//evil.example/x", b"http://evil.example/x"])
+async def test_plex_art_rejects_non_thumb_paths(hass, aioclient_mock, bad):
+    with pytest.raises(ServiceValidationError):
+        await PlexServer(hass, PLEX, "tok", None).fetch_art(_key(bad))
+    with pytest.raises(ServiceValidationError):
+        await PlexServer(hass, PLEX, "tok", None).fetch_art("!!not-base64!!")
+    assert aioclient_mock.call_count == 0
+
+
+async def test_plex_art_rejects_non_image_response(hass, aioclient_mock):
+    aioclient_mock.get(f"{PLEX}/photo/:/transcode", content=b"<html>", headers={"Content-Type": "text/html"})
     with pytest.raises(HomeAssistantError):
-        await plex.fetch_art(base64.urlsafe_b64encode(b"/library/metadata/3/thumb/2").decode())
+        await PlexServer(hass, PLEX, "tok", None).fetch_art(_key(b"/library/metadata/3/art/2"))
+
+
+async def test_plex_item_with_unproxyable_thumb_has_no_image(hass, aioclient_mock):
+    aioclient_mock.get(f"{PLEX}/library/recentlyAdded", json={"MediaContainer": {"Metadata": [
+        {"ratingKey": "1", "type": "movie", "title": "A", "thumb": "/library/sections/all/refresh"},
+        {"ratingKey": "2", "type": "movie", "title": "B"}]}})
+    assert [i["image"] for i in await PlexServer(hass, PLEX, "tok", None).recently_added()] == [None, None]
+
+
+async def test_jellyfin_sessions_only_configured_user(hass, aioclient_mock):
+    now = {"Id": "a", "Name": "Dune"}
+    aioclient_mock.get(f"{JF}/Sessions", json=[
+        {"Id": "mine", "UserId": "A1B2-C3", "DeviceName": "TV", "SupportsMediaControl": True, "NowPlayingItem": now,
+         "LastActivityDate": "2026-10-09T10:00:00Z"},
+        {"Id": "other", "UserId": "ffff", "DeviceName": "TV", "SupportsMediaControl": True, "NowPlayingItem": now,
+         "LastActivityDate": "2026-10-09T12:00:00Z"}])
+    aioclient_mock.get(f"{JF}/Items", json={"Items": []})
+    aioclient_mock.post(f"{JF}/Sessions/mine/Playing", status=204)
+    jf = JellyfinServer(hass, JF, "key", "a1b2c3", None)  # dashes and case are irrelevant
+    assert [n["player"] for n in await jf.sessions()] == ["TV"]
+    assert await jf.play("abc") is True
+    assert aioclient_mock.mock_calls[-1][1].path == "/Sessions/mine/Playing"  # newer session belongs to someone else
+    assert await JellyfinServer(hass, JF, "key", "zzzz", None).sessions() == []
 
 
 async def test_library_sessions_aggregate_both_servers(hass, aioclient_mock):
@@ -191,6 +231,30 @@ async def test_library_refresh_fills_items_and_notifies(hass, aioclient_mock):
     await lib.async_refresh()
     assert [i["id"] for i in lib.items["jellyfin"]["continue"]] == ["e1"]
     assert [i["id"] for i in lib.items["jellyfin"]["recent"]] == ["m1"] and changes == [1]
+
+
+async def test_library_refresh_keeps_last_items_when_server_fails(hass, aioclient_mock):
+    aioclient_mock.get(f"{JF}/UserItems/Resume", json={"Items": [{"Id": "e1", "Name": "Pilot", "Type": "Episode"}]})
+    aioclient_mock.get(f"{JF}/Items/Latest", json=[{"Id": "m1", "Name": "Dune", "Type": "Movie"}])
+    changes = []
+    lib = Library(hass, [JellyfinServer(hass, JF, "key", "u1", None)], on_change=lambda: changes.append(1))
+    await lib.async_refresh()
+    kept = lib.items["jellyfin"]
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{JF}/UserItems/Resume", status=500)
+    aioclient_mock.get(f"{JF}/Items/Latest", status=500)
+    await lib.async_refresh()
+    assert lib.items["jellyfin"] == kept and kept["continue"][0]["id"] == "e1" and changes == [1]
+
+
+async def test_library_refresh_silent_when_unchanged(hass, aioclient_mock):
+    aioclient_mock.get(f"{JF}/UserItems/Resume", json={"Items": []})
+    aioclient_mock.get(f"{JF}/Items/Latest", json=[{"Id": "m1", "Name": "Dune", "Type": "Movie"}])
+    changes = []
+    lib = Library(hass, [JellyfinServer(hass, JF, "key", "u1", None)], on_change=lambda: changes.append(1))
+    await lib.async_refresh()
+    await lib.async_refresh()
+    assert changes == [1]
 
 
 async def test_library_start_polls_sessions_until_cancelled(hass, aioclient_mock):
