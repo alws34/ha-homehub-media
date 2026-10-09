@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from functools import lru_cache
 from urllib.parse import quote
 
 from homeassistant.components.http.auth import async_sign_path
@@ -54,9 +55,16 @@ NAMES = {"tv": "TV", "box": "streaming box", "pc": "media PC", "keyboard": "keyb
 PLAY_TIMEOUT, PLAY_RETRY = 15, 3  # s: a just-launched Plex/Jellyfin app needs a moment before remote play works
 
 
-def sign(hass: HomeAssistant, path: str, **kwargs) -> str:
-    """async_sign_path for 24 h, kept percent-encoded (HA returns the path decoded: '#', '?', ' ' would break it)."""
-    path, _, query = async_sign_path(hass, path, timedelta(hours=24), **kwargs).rpartition("?")
+def sign(hass: HomeAssistant, path: str, refresh_token_id: str | None = None) -> str:
+    """Signed URL (the content user's when no token is given), the same all hour so browsers can cache it."""
+    return _sign(hass, path, refresh_token_id, int(time.time() // 3600))
+
+
+@lru_cache(maxsize=1024)  # ponytail: entries of past hours just age out of the LRU
+def _sign(hass: HomeAssistant, path: str, refresh_token_id: str | None, _hour: int) -> str:
+    signed = async_sign_path(hass, path, timedelta(hours=24), refresh_token_id=refresh_token_id,
+                             use_content_user=refresh_token_id is None)
+    path, _, query = signed.rpartition("?")  # HA returns the path decoded: '#', '?', ' ' would break the URL
     return f"{quote(path, safe='/')}?{query}"
 
 
@@ -95,33 +103,39 @@ class Hub:
     # ---- lifecycle ---------------------------------------------------------------------------------
 
     async def async_start(self) -> None:
-        await self.ambience.async_load()
         if self.library:
-            await self.library.async_refresh()
-            await self.library.async_refresh_sessions()
             self._unsubs.append(self.library.async_start())
         self._unsubs.append(async_track_time_interval(self.hass, self._poll_tv, timedelta(seconds=30)))
-        # in the background: an unreachable TV must neither fail nor slow down setup
-        self.entry.async_create_background_task(self.hass, self._poll_tv(), "homehub_media_tv_poll")
+        # first loads in the background: a TV, media PC or media server that is down must not fail or slow setup
+        load = self.entry.async_create_background_task(self.hass, self._load(), "homehub_media_load")
+        self._unsubs.append(load.cancel)
+
+    async def _load(self) -> None:
+        lib = self.library
+        await asyncio.gather(self.ambience.async_load(), self._poll_tv(),
+                             *((lib.async_refresh(), lib.async_refresh_sessions()) if lib else ()))
 
     async def async_stop(self) -> None:
+        while self._unsubs:  # first: a cancelled startup load then registers nothing after the shutdowns
+            self._unsubs.pop()()
         await self.ambience.async_shutdown()
         await self.activity.async_shutdown()
-        while self._unsubs:
-            self._unsubs.pop()()
         await self.tv.close()
 
     async def _poll_tv(self, _now: datetime | None = None) -> None:
-        """Refresh tv.available (REST PowerState); discover the apps once, when the TV first answers."""
+        """Refresh tv.available (REST PowerState); discover the apps once, when the TV is really on."""
         try:
             await self.tv.device_info()
-            if "discovered" not in (self.entry.options.get(OPT_APPS) or {}):
+            # standby answers REST too but may 404 every app, which would persist an empty discovery
+            if self.tv.available and "discovered" not in (self.entry.options.get(OPT_APPS) or {}):
                 await self.rescan_apps()
         except HomeAssistantError as err:
             _LOGGER.debug("TV poll failed: %s", err)
 
     async def rescan_apps(self) -> dict[str, str]:
-        section = {**(self.entry.options.get(OPT_APPS) or {}), "discovered": await self.tv.discover_apps()}
+        if not (found := await self.tv.discover_apps()):
+            raise HomeAssistantError("The TV listed no apps; turn it on and rescan")
+        section = {**(self.entry.options.get(OPT_APPS) or {}), "discovered": found}
         self.options[OPT_APPS], self.apps = section, _apps(section)
         # no update listener (OptionsFlowWithReload reloads on its own), so this does not reload
         self.hass.config_entries.async_update_entry(self.entry, options={**self.entry.options, OPT_APPS: section})
@@ -141,12 +155,14 @@ class Hub:
 
     @callback
     def async_notify(self) -> None:
+        if self.activity.current != "tv":  # box, PC or off: no TV app in front any more
+            self.current_app = None
         for cb in list(self._listeners):
             cb()
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
     def sign_path(self, path: str) -> str:
-        return sign(self.hass, path, use_content_user=True)
+        return sign(self.hass, path)
 
     # ---- commands ----------------------------------------------------------------------------------
 
@@ -183,17 +199,28 @@ class Hub:
         server = APP_CATALOG.get(app, {}).get("server")
         return ((self.options.get(OPT_SERVERS) or {}).get(server) or {}).get("url") if server else None
 
+    def _app_key(self, value: str | None) -> str | None:
+        """APP_CATALOG key for an app key, name or Tizen id (e.g. an app sensor's state); else the value."""
+        if not value:
+            return value
+        folded = value.casefold()
+        return next((key for key, app in APP_CATALOG.items()
+                     if folded in (key, app["name"].casefold()) or value in app["ids"] or self.apps.get(key) == value),
+                    value)
+
     async def launch_app(self, app: str) -> None:
         app_id, url = self.apps.get(app), self._server_url(app)
         if not app_id and not url and (app in APP_CATALOG or not APP_ID_RE.fullmatch(app)):
             raise ServiceValidationError(f"{APP_CATALOG.get(app, {}).get('name', app)} is not installed on the TV")
+        if self.ambience.uses_media and self.ambience.mode != "off":  # the page would sit on top of the app
+            await self.ambience.stop()
         if self.activity.current != "tv":
             await self.activity.set("tv")
         if app_id or not url:
             await self.tv.launch(app_id or app)  # installed app, or a raw Tizen id
         else:  # e.g. no Jellyfin app on the TV: the server's web UI in the TV browser
             await self.tv.open_url(url)
-        self.current_app = app
+        self.current_app = self._app_key(app)
         self.async_notify()
 
     async def restart_app(self, app: str) -> None:
@@ -255,7 +282,7 @@ class Hub:
     async def pc_open(self, client: str) -> None:
         if not self.pc_coord:
             raise ServiceValidationError("The media PC is not configured")
-        if self.ambience.uses_media:
+        if self.ambience.uses_media and self.ambience.mode != "off":
             await self.ambience.stop()
         if self.activity.current != "pc":  # re-selecting would reset the volume for nothing
             await self.activity.set("pc")
@@ -271,13 +298,14 @@ class Hub:
         self.async_notify()
 
     async def play_library_item(self, server: str, item_id: str) -> None:
+        name = APP_CATALOG.get(server, {}).get("name", server)
         if not (srv := self.library and self.library.server(server)):
-            raise ServiceValidationError(f"{server} is not configured")
+            raise ServiceValidationError(f"{name} is not configured")
         await self.launch_app(server)
         end = time.monotonic() + PLAY_TIMEOUT
         while not await srv.play(item_id):
             if time.monotonic() >= end:
-                raise HomeAssistantError(f"{server} did not start playing")
+                raise HomeAssistantError(f"{name} did not start playing")
             await asyncio.sleep(PLAY_RETRY)
 
     # ---- K4 ----------------------------------------------------------------------------------------
@@ -293,7 +321,7 @@ class Hub:
                    "volume": round(level * 100) if level is not None else None,
                    "muted": st.attributes.get("is_volume_muted") if st else None,
                    "keyboard_active": self.tv.keyboard_active, "pointer_active": self.tv.pointer_active,
-                   "app": app.state if app else self.current_app},
+                   "app": self._app_key(app.state) if app else self.current_app},
             "activity": {"current": self.activity.current, "phase": self.activity.phase, "quiet": self.activity.quiet,
                          "available": ["off", "tv", *(a for a in (OPT_BOX, OPT_PC) if self.options.get(a))]},
             "targets": {"box": bool(self.options.get(OPT_BOX)), "pc": bool(self.pc_coord), "keyboard": bool(self.keyboard)},

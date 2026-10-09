@@ -286,6 +286,7 @@ class AmbienceManager:
                 await self._stop()
 
     async def _stop(self, restore_lights: bool = True, keep_page: bool = False) -> None:
+        self._hub.last_command = time.monotonic()  # any stop counts as activity: auto ambience must not restart it
         await _cancel(self._jobs)
         await _cancel(self._sleep)
         self.sleep_until = self._fade_secs = None
@@ -424,7 +425,6 @@ class AmbienceManager:
         if item and "url" in item:  # radio: cross-origin https, allowed by the page only with stream: true
             return {"url": item["url"], "stream": True, "loop": False, "random_start": False, "volume": volume / 100}
         if item and "path" in item:
-            # ponytail: hub.sign_path returns a decoded path; file names with "#"/"?" would break the URL
             url = self._hub.sign_path(f"/media/local/{MEDIA_ROOT}/{_DIRS[kind]}/{quote(item['path'])}")
             return {"url": url, "loop": loop, "random_start": random_start, "volume": volume / 100}
         return None
