@@ -1,0 +1,29 @@
+blueprint:
+  name: HomeHub Media - ambience at sunset
+  description: >-
+    At sunset, if the TV is off, start the ambience mode configured for the current time of day
+    (HomeHub Media options, Dayparts).
+  domain: automation
+  source_url: https://github.com/alws34/ha-homehub-media/blob/main/blueprints/automation/homehub_media/sunset_ambience.yaml
+  input:
+    tv:
+      name: TV media player
+      selector:
+        entity:
+          filter: [{ domain: media_player }]
+    offset:
+      name: Offset from sunset
+      default: "00:00:00"
+      selector:
+        duration: {}
+mode: single
+triggers:
+  - trigger: sun
+    event: sunset
+    offset: !input offset
+conditions:
+  - condition: state
+    entity_id: !input tv
+    state: "off"
+actions:
+  - action: homehub_media.ambience_auto
