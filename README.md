@@ -170,6 +170,15 @@ Samsung TVs from 2021 on do not let Home Assistant open the ambience page in the
 
 The videos appear in the card's visual carousel in the order you entered them, with their YouTube thumbnail and a "YouTube" label. The name is the title, and the ID comes from the name the same way as for files (`Star night` becomes `star_night`). A name without Latin letters, for example in Hebrew, gets `yt_` and the video ID in lowercase instead. If a local file already has that ID, the video gets `_2`, and so on. Assign a video to a mode like any other visual.
 
+**Edit a mode's videos in the card** (admin users)
+
+1. On the **Ambience** tab, select the edit button on a mode.
+2. Under **YouTube videos**, each of the mode's videos shows its thumbnail, name, and link. Change a name or link in place, or select the bin button to remove a video.
+3. To add a video, enter a name and a link in the empty row at the bottom, then select the plus button or press Enter.
+4. Select **Save**.
+
+On **Save**, the list becomes the mode's visuals: the first video is the mode's visual, and all of them form its random rotation (local files in the rotation are replaced). The videos are added to the **Configure › Ambience** list, or changed there when a video with the same name exists, and that name's link changes for every mode that uses it. A video you remove leaves that list too, unless another mode still uses it. A link that is not a YouTube video shows an error and nothing is saved. In automations, call `set_mode_videos`.
+
 **What happens on the TV**
 
 1. HomeHub switches the activity to Samsung TV and sets the mode's lights.
@@ -253,6 +262,7 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 | `ambience_sleep_timer` | `minutes` | Stops ambience after `minutes` (0 to 600). 0 cancels the timer. Needs a running mode. |
 | `refresh_catalog` | | Rescans the ambience folders (or the media PC) for visuals and soundtracks. |
 | `rescan_apps` | | Asks the TV which streaming apps are installed. The TV must be on. Admin users only. |
+| `set_mode_videos` | `mode`, `videos` (a list of `name` and `url`) | Sets the mode's YouTube videos, as **Save** does in the card's video list (see [YouTube ambience](#youtube-ambience)). An empty list leaves the mode without visuals. Admin users only. |
 | `play_library_item` | `server`, `item_id` | Opens Plex or Jellyfin on the TV and plays an item. `server` is `plex` or `jellyfin`, and `item_id` is the item's ID on that server. |
 | `pc_open` | `client` | Opens an app on the media PC by its name, as listed in the Media PC options. Switches the activity to Media PC and stops ambience that plays video or sound. |
 | `pc_close` | | Closes the app open on the media PC. |
@@ -357,7 +367,7 @@ HomeHub Media replaces the HomeHub Media Controller & Ambience bundle (YAML pack
 
 ## Security
 
-- Every service and WebSocket command goes through Home Assistant's authentication. Only signed-in users and authorised automations can call them. `rescan_apps` (it rewrites the integration options) is limited to admin users.
+- Every service and WebSocket command goes through Home Assistant's authentication. Only signed-in users and authorised automations can call them. `rescan_apps` and `set_mode_videos` (they rewrite the integration options) are limited to admin users.
 - The TV ambience page link is signed and tied to one ambience session. It stops working when that ambience stops. Links to ambience media files are signed and expire after 24 hours. Restarting Home Assistant revokes all signed links.
 - Plex and Jellyfin tokens stay in Home Assistant. Artwork goes through an authenticated Home Assistant proxy, so the tokens never reach the browser or the TV.
 - Titles from shared Plex or Jellyfin servers are untrusted text for the voice assistant. See [Voice assistant](#voice-assistant).

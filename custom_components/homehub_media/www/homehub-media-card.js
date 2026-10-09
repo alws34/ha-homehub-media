@@ -45,6 +45,13 @@ const toggleIn = (list, id) => {
   if (l.includes(id)) return l.filter((x) => x !== id);
   return l.length < VISUALS_MAX ? [...l, id] : l;
 };
+// the mode's YouTube videos as editor rows: its visual and rotation, in order, that are YouTube visuals
+const modeVideos = (comp, visuals) => [...new Set([comp?.visual, ...(comp?.visuals || [])])]
+  .map((id) => visuals?.find((v) => v.id === id && v.source_type === "youtube")).filter(Boolean)
+  .map((v) => ({ name: v.title, url: v.link, preview: v.preview }));
+// their ids once saved: a YouTube visual's title is its (unique) name
+const videoIds = (rows, visuals) => rows
+  .map((r) => visuals?.find((v) => v.source_type === "youtube" && v.title === r.name.trim())?.id).filter(Boolean);
 const randomLabel = (comp) => (comp?.visuals?.length >= 2 ? `Random from ${comp.visuals.length} videos` : "");
 // the TV volume is known only with the TV media player, which set_volume needs: no level, no slider
 const volumeSlider = (level) => (level == null ? ""
@@ -710,12 +717,17 @@ class HomeHubMediaCard extends HTMLElement {
   _ambSlice() {
     const a = this._snap.ambience || {};
     if (!this._edit) return ["grid", a.mode, a.modes, a.auto, a.daypart_mode, (a.modes || []).map((m) => randomLabel(a.compositions?.[m.id]))];
-    return ["edit", this._edit.id, this._edit.draft, this._browse, this._catVer, this._catalogErr,
+    return ["edit", this._edit.id, this._edit.draft, this._edit.videos, this._browse, this._catVer, this._catalogErr,
       a.mode === this._edit.id, a.modes, this._refreshing];
   }
 
   _renderAmbience() {
     const a = this._snap.ambience || {};
+    const ed = this._edit;
+    if (ed && !ed.videos && this._catalog) {
+      ed.videos = modeVideos(ed.draft, this._catalog.visuals);
+      ed.videosSaved = JSON.stringify(ed.videos);
+    }
     this._sec("amberr", [a.error], () => (a.error ? banner(a.error) : ""));
     this._sec("ambmain", this._ambSlice(), () => (this._edit ? this._editorHtml() : this._modesHtml()));
     const until = a.sleep_until ? new Date(a.sleep_until).getTime() : null;
@@ -827,10 +839,51 @@ class HomeHubMediaCard extends HTMLElement {
   async _save() {
     const ed = this._edit;
     const name = this._snap.ambience?.modes?.find((m) => m.id === ed.id)?.name || pretty(ed.id);
-    if (await this._call("save_mode", { mode: ed.id, ...ed.draft })) {
+    if (!(await this._call("save_mode", { mode: ed.id, ...ed.draft }))) return;
+    ed.saved = JSON.stringify(ed.draft);
+    if (ed.videos && JSON.stringify(ed.videos) !== ed.videosSaved) {
+      if (!(await this._call("set_mode_videos", { mode: ed.id, videos: ed.videos.map(({ name: n, url }) => ({ name: n, url })) }))) return;
+      await this._load("catalog");
+      const visuals = videoIds(ed.videos, this._catalog?.visuals);  // what the service saved as the mode's visuals
+      Object.assign(ed.draft, { visual: visuals[0] ?? null, visuals, visual_enabled: visuals.length > 0 });
       ed.saved = JSON.stringify(ed.draft);
-      this._toast(`Saved ${name}`);
+      ed.videos = null;  // re-read from the catalog, with the new videos' thumbnails
+      this._browse.visual = ed.draft.visual;
+      this._render();
     }
+    this._toast(`Saved ${name}`);
+  }
+
+  _addVideo() {
+    const [name, url] = ["name", "url"].map((f) => this.shadowRoot.querySelector(`[data-vadd=${f}]`));
+    if (!name.value.trim() || !url.value.trim()) {
+      this._toast("Enter a name and a YouTube link");
+      (name.value.trim() ? url : name).focus();
+      return;
+    }
+    this._edit.videos.push({ name: name.value.trim(), url: url.value.trim(), preview: null });
+    this._render();
+    this.shadowRoot.querySelector("[data-vadd=name]")?.focus();
+  }
+
+  _videosHtml() {
+    const vids = this._edit.videos;
+    if (!vids) return "";
+    const field = (attr, f, value, label, ph) => `<input ${attr} data-vf="${f}" value="${esc(value)}" maxlength="200" autocomplete="off"
+      ${f === "url" ? 'type="url" autocapitalize="off" spellcheck="false"' : 'type="text"'} aria-label="${label}" placeholder="${ph}">`;
+    return `<section class="edsec" aria-labelledby="ythead">
+        <h3 class="sh" id="ythead">${icon("mdi:youtube")}YouTube videos</h3>
+        ${vids.length ? `<ul class="vids">${vids.map((v, i) => `<li class="vrow">
+            <span class="art">${icon("mdi:youtube")}${img(v.preview)}</span>
+            <span class="vin">${field(`data-vi="${i}"`, "name", v.name, `Video ${i + 1} name`, "Name")}${field(`data-vi="${i}"`, "url", v.url, `Video ${i + 1} YouTube link`, "YouTube link")}</span>
+            <button class="ib flat" data-a="vdel" data-v="${i}" aria-label="Remove video ${i + 1}">${icon("mdi:delete-outline")}</button>
+          </li>`).join("")}</ul>` : hint("No YouTube videos in this mode")}
+        <div class="vrow">
+          <span class="art">${icon("mdi:playlist-plus")}</span>
+          <span class="vin">${field('data-vadd="name"', "name", "", "New video name", "Name")}${field('data-vadd="url"', "url", "", "New video YouTube link", "YouTube link")}</span>
+          <button class="ib" data-a="vadd" aria-label="Add video">${icon("mdi:plus")}</button>
+        </div>
+      </section>`;
   }
 
   async _start() {
@@ -893,6 +946,7 @@ class HomeHubMediaCard extends HTMLElement {
         </div>
         ${randomLabel(d) ? hint(`${randomLabel(d)} each time the mode starts`, "mdi:shuffle-variant") : ""}
       </section>
+      ${this._videosHtml()}
       <section class="edsec">
         <h3 class="sh">${icon("mdi:music-note-outline")}Soundtrack</h3>
         ${this._carouselHtml("soundtrack")}
@@ -995,6 +1049,12 @@ class HomeHubMediaCard extends HTMLElement {
       case "vis": return this._editSet(ed.draft.visual_enabled ? { visual_enabled: false }
         : { visual_enabled: true, visual: ed.draft.visual ?? this._cur("visual").item?.id ?? null });
       case "audio": return this._editSet({ soundtrack: ed.draft.soundtrack != null ? null : this._cur("soundtrack").item?.id ?? null });
+      case "vadd": return this._addVideo();
+      case "vdel": {
+        ed.videos.splice(Number(v), 1);
+        this._render();
+        return this.shadowRoot.querySelector("[data-vadd=name]")?.focus();
+      }
       case "save": return this._save();
       case "start": return this._start();
       case "play": {
@@ -1090,6 +1150,14 @@ class HomeHubMediaCard extends HTMLElement {
       }
       return;
     }
+    if (t.matches?.("[data-vi], [data-vadd]")) {
+      e.stopPropagation();  // keep HA's global shortcuts out of the text field
+      if (e.key === "Enter" && !e.isComposing && t.dataset.vadd) {
+        e.preventDefault();
+        this._addVideo();
+      }
+      return;
+    }
     if (e.key === "Escape" && this._config.drawer && this._open) {
       this._toggleDrawer(false);
       this.shadowRoot.querySelector(".handle")?.focus();
@@ -1140,6 +1208,11 @@ class HomeHubMediaCard extends HTMLElement {
         this._volTimer = null;
         this._call("set_volume", { level });
       }, 250);
+      return;
+    }
+    if (t.matches?.("[data-vi]") && this._edit?.videos) {
+      this._edit.videos[t.dataset.vi][t.dataset.vf] = t.value;
+      this._slices.ambmain = JSON.stringify(this._ambSlice());  // the field already shows it: no re-render while typing
       return;
     }
     if (!t.matches?.("[data-mix]") || !this._edit) return;
@@ -1424,6 +1497,16 @@ input[type=range]:focus-visible { outline: none; }
 input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--hh-accent), 0 0 0 6px rgba(var(--hh-rgb), .3); }
 .mixlab { display: flex; justify-content: space-between; margin-top: -4px; font-size: 12.5px; color: var(--hh-fg2); }
 .mixlab b { color: var(--hh-fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.vids { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.vrow { display: grid; grid-template-columns: 72px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.vrow .art { display: grid; place-items: center; aspect-ratio: 16 / 9; border-radius: 8px; background: var(--hh-s2); color: var(--hh-fg2); }
+.vin { display: grid; gap: 6px; min-width: 0; }
+.vin input {
+  width: 100%; height: 40px; padding: 0 12px; border: 0; border-radius: 10px; background: var(--hh-s1); color: inherit;
+  box-shadow: inset 0 0 0 1px var(--hh-line); font: inherit; font-size: 16px; outline: 0;
+}
+.vin input:focus-visible { background: var(--hh-bg); box-shadow: inset 0 0 0 2px var(--hh-accent); }
+.vin input::placeholder { color: var(--hh-fg2); opacity: 1; }
 .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .actions .btn { min-width: 112px; }
 
@@ -1475,4 +1558,4 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === TAG)) {
   window.customCards.push({ type: TAG, name: "HomeHub Media", description: "Remote, ambience and library", preview: true });
 }
-if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider };
+if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeVideos, videoIds };

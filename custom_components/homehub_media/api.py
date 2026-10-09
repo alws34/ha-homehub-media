@@ -98,7 +98,8 @@ COMPOSITION = {  # types only; the ambience manager validates ids and the merged
     vol.Optional("soundtrack_volume"): _PCT,
     vol.Optional("visuals"): vol.All(cv.ensure_list, [cv.string], vol.Length(max=50)),
 }
-ADMIN_SERVICES = ("rescan_apps",)  # writes the config entry; a media-folder rescan is harmless for any user
+# they write the config entry; a media-folder rescan is harmless for any user
+ADMIN_SERVICES = ("rescan_apps", "set_mode_videos")
 SERVICES: dict[str, tuple[dict, Any]] = {
     "remote": ({vol.Required("command"): vol.In(COMMANDS), vol.Optional("target"): vol.In(TARGETS)},
                lambda hub, d: hub.remote(**d)),
@@ -125,6 +126,11 @@ SERVICES: dict[str, tuple[dict, Any]] = {
     "ambience_update": (COMPOSITION, lambda hub, d: hub.ambience.update(dict(d))),
     "save_mode": ({vol.Required("mode"): cv.slug, **COMPOSITION},
                   lambda hub, d: hub.ambience.save_mode(d["mode"], {k: v for k, v in d.items() if k != "mode"})),
+    "set_mode_videos": ({vol.Required("mode"): cv.slug, vol.Required("videos"): vol.All(cv.ensure_list, [{
+                            # Configure > Ambience lists the videos as name=link
+                            vol.Required("name"): vol.All(_text, vol.Match(r"[^=]+\Z", msg="a video name cannot contain =")),
+                            vol.Required("url"): _text}], vol.Length(max=50))},
+                        lambda hub, d: hub.ambience.set_mode_videos(d["mode"], d["videos"])),
     "set_favorite": ({vol.Required("kind"): vol.In(("visual", "soundtrack")),
                       vol.Required("media_id"): vol.Match(r"^[a-z0-9][a-z0-9_-]{0,63}\Z"),  # catalog.ID_RE
                       vol.Required("favorite"): cv.boolean}, lambda hub, d: hub.ambience.set_favorite(**d)),

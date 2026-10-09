@@ -106,7 +106,8 @@ def test_youtube_items_keep_order_and_unique_ids():
     assert [i["id"] for i in items[:2]] == ["video_25_2", "video_24"]  # never a scanned file's id
     assert [i["id"] for i in items[-2:]] == ["rain", "rain_2"]
     assert items[-2] == {"id": "rain", "kind": "visual", "title": "Rain", "source_type": "youtube", "live": False,
-                         "duration": None, "youtube_id": VID, "preview": f"/api/homehub_media/art/youtube/{VID}"}
+                         "duration": None, "youtube_id": VID, "preview": f"/api/homehub_media/art/youtube/{VID}",
+                         "link": f"https://www.youtube.com/watch?v={VID}&pp=x"}
     for bad in ({" ": VID}, {"Rain": "https://example.com/x"}):
         with pytest.raises(ValueError):
             c.youtube_items(bad)
