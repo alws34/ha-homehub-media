@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import secrets
 import time
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from . import catalog as cat
 from .const import (
+    APP_CATALOG,
     DEFAULT_DAYPARTS,
     DEFAULT_MODES,
     MEDIA_ROOT,
@@ -45,7 +47,7 @@ STATE_URL_HOURS = 2  # the page's state URL signature; media URLs keep the defau
 HEALTH_SECS, PAGE_GRACE_SECS, PAGE_TIMEOUT_SECS, FADE_SECS, ENTER_DELAY_SECS = 30, 60, 45, 60, 4
 IDLE_APP_STATES = {"", "unknown", "home", "Home", "TV", "off"}
 _DIRS = {"visual": VIDEO_DIR, "soundtrack": SOUNDTRACK_DIR}
-_SERVER_ONLY = {"path", "preview_path", "url"}
+_SERVER_ONLY = {"path", "preview_path", "url", "youtube_id"}
 # Composition -> K8 PATCH layers: (layer, media key, enabled key, {composition key: layer field})
 _LAYERS = (
     ("video", "visual", "visual_enabled",
@@ -91,6 +93,7 @@ class AmbienceManager:
         self._sid: str | None = None  # TV page session: only its state URL is answered
         self._catalog: dict[str, list[dict]] = {"visuals": [], "soundtracks": []}
         self._comp: dict | None = None
+        self._yt: str | None = None  # video id while the media is a YouTube visual on the TV
         self._snapshot = False  # scene.homehub_media_snapshot holds the pre-ambience lights
         self._fade_secs: int | None = None
         self._started = 0.0
@@ -158,7 +161,8 @@ class AmbienceManager:
                                     if os.path.isfile(self.hass.config.path("www", "Ambience", item["id"] + ext))),
                                    None)
 
-    async def refresh_catalog(self) -> None:
+    async def _scan(self, amb: dict) -> dict:
+        """The backend's files (and radio stations)."""
         if self._backend == "pc":
             await self._hub.pc_ambient.refresh()  # rescan the PC's disk
             data = await self._hub.pc_ambient.catalog()
@@ -169,21 +173,37 @@ class AmbienceManager:
                            if isinstance(i, dict) and isinstance(i.get("id"), str) and cat.ID_RE.fullmatch(i["id"])]
                      for key in ("visuals", "soundtracks")}
             await self.hass.async_add_executor_job(self._add_pc_previews, found["visuals"] + found["soundtracks"])
-        else:
-            try:
-                radio = cat.radio_items((self._hub.options.get(OPT_AMBIENCE) or {}).get("radio") or {})
-                found = await self.hass.async_add_executor_job(self._scan_tv)
-            except ValueError as err:
-                raise ServiceValidationError(str(err)) from err
-            except OSError as err:
-                raise HomeAssistantError("Cannot read the ambience media folder") from err
-            found["soundtracks"] += [{**r, "preview": None} for r in radio]
+            return found
+        try:
+            radio = cat.radio_items(amb.get("radio") or {})
+            found = await self.hass.async_add_executor_job(self._scan_tv)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        except OSError as err:
+            raise HomeAssistantError("Cannot read the ambience media folder") from err
+        found["soundtracks"] += [{**r, "preview": None} for r in radio]
+        return found
+
+    async def refresh_catalog(self) -> None:
+        """Rescan; YouTube videos need no scan, so they are offered even when the scan fails (which still raises)."""
+        amb, error = self._hub.options.get(OPT_AMBIENCE) or {}, None
+        try:
+            found = await self._scan(amb)
+        except HomeAssistantError as err:  # keep the files the last scan found
+            found = {k: [i for i in items if i.get("source_type") != "youtube"] for k, items in self._catalog.items()}
+            error = err
+        try:  # YouTube plays in the TV's app whatever the backend
+            found["visuals"] += cat.youtube_items(amb.get("youtube") or {}, {v["id"] for v in found["visuals"]})
+        except ValueError as err:
+            error = error or ServiceValidationError(str(err))
         for kind in _DIRS:
             favs = self._store.favorites(kind)
             for item in found[f"{kind}s"]:
                 item["favorite"] = item["id"] in favs
         self._catalog = found
         self._hub.async_notify()
+        if error:
+            raise error
 
     def catalog(self) -> dict:
         # ponytail: TV previews are unsigned /media/local/... paths; the ws handler signs them per caller (K5)
@@ -192,26 +212,50 @@ class AmbienceManager:
 
     # ---- start / stop / update ---------------------------------------------------------------------
 
-    async def start(self, mode_id: str, composition: dict | None = None) -> None:
+    def _youtube_id(self, comp: dict) -> str | None:
+        """Video id when the composition shows a YouTube visual."""
+        item = comp["visual_enabled"] and next((i for i in self._catalog["visuals"] if i["id"] == comp["visual"]), None)
+        return item.get("youtube_id") if item else None
+
+    def _with_visual(self, comp: dict, shuffle: bool) -> dict:
+        """This run's visual: a random one of the `visuals` still in the catalog when shuffling or `visual` is
+        unset; else `visual` (no visual at all turns the layer off)."""
+        if comp["visuals"] and (shuffle or comp["visual"] is None):
+            known = {i["id"] for i in self._catalog["visuals"]}
+            pool = [v for v in comp["visuals"] if v in known]
+            visual = random.choice(pool) if pool else comp["visual"]
+            comp = {**comp, "visual": visual, "visual_enabled": comp["visual_enabled"] and visual is not None}
+        return comp
+
+    @property
+    def _youtube_app(self) -> str:
+        return self._hub.apps.get("youtube") or APP_CATALOG["youtube"]["ids"][0]
+
+    async def start(self, mode_id: str, composition: dict | None = None, *, shuffle: bool = True) -> None:
         mode = self._mode(mode_id)
         try:
             comp = self.composition(mode_id) if composition is None else cat.validate_composition(composition)
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
+        comp = self._with_visual(comp, shuffle)
+        yt = None if mode["lights_only"] else self._youtube_id(comp)
+        player = "tv" if yt else self._backend  # YouTube plays in the TV's app whatever the backend
         lighting = bool(mode["scene"] or mode["flicker"])
         async with self._lock:
             self._gen += 1  # in-flight health checks / sleep timers of the previous run become no-ops
             need_activity = not mode["lights_only"] and (
-                self._backend == "pc" or self._hub.activity.current != "tv" or not self._hub.tv.available)
-            # TV page already up and staying up: swap media in place (the page changes URLs without a reload)
-            swap = (self.uses_media and self._backend == "tv" and not mode["lights_only"] and not need_activity
-                    and time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS)  # page still polling
+                player == "pc" or self._hub.activity.current != "tv" or not self._hub.tv.available)
+            # the same player stays up: swap media in place. The TV page changes URLs without a reload (while
+            # it still polls); YouTube takes the next video warm, without its profile picker.
+            page_up = self._backend == "tv" and time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS
+            swap = (self.uses_media and not mode["lights_only"] and not need_activity
+                    and (self._yt is not None if yt else self._yt is None and page_up))
             if self.mode != "off":  # switching: keep the pre-ambience snapshot if the new mode drives lights
                 # ponytail: lights only the new mode touches are not in the kept snapshot, so stay as set
                 await self._stop(restore_lights=not lighting, keep_page=swap)
             try:
                 # before self.mode is set: activity.set() stops a running media ambience
-                if need_activity and not await self._hub.activity.set(self._backend):
+                if need_activity and not await self._hub.activity.set(player):
                     await self._stop()  # superseded by a newer activity request: start nothing
                     return
                 if lighting:
@@ -258,8 +302,13 @@ class AmbienceManager:
                 await asyncio.sleep(secs)
 
     async def _play(self, comp: dict, swap: bool = False) -> None:
-        if self._backend == "pc":
-            await self._hub.pc_ambient.play(comp)
+        if yt := self._youtube_id(comp):
+            if comp["soundtrack"]:
+                _LOGGER.debug("YouTube visual plays its own sound; soundtrack %s is not used", comp["soundtrack"])
+            self._yt = yt  # first: a failed start still stops what began
+            await self._hub.tv.play_youtube(yt)
+        elif self._backend == "pc":
+            await self._hub.pc_ambient.play({k: v for k, v in comp.items() if k != "visuals"})
         else:
             self.page_version += 1
             if not swap:
@@ -305,8 +354,11 @@ class AmbienceManager:
         if self.uses_media and not keep_page:
             self.uses_media = False
             self.page_version += 1  # page sees stop: true
+            yt, self._yt = self._yt, None
             try:
-                if self._backend == "pc":
+                if yt:
+                    await self._hub.tv.stop_youtube(self._youtube_app)
+                elif self._backend == "pc":
                     await self._hub.pc_ambient.stop()
                 elif time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS:  # never HOME the user's app
                     await self._hub.tv.send_key("KEY_HOME")
@@ -328,14 +380,24 @@ class AmbienceManager:
                 raise ServiceValidationError("No ambience media is playing")
             try:
                 part = cat.validate_composition(changes, partial=True)
-                comp = cat.validate_composition({**self._comp, **part})
+                comp = self._with_visual(cat.validate_composition({**self._comp, **part}), shuffle=False)
             except ValueError as err:
                 raise ServiceValidationError(str(err)) from err
-            if self._backend == "pc":
-                await self._hub.pc_ambient.patch(_pc_patch(comp, set(part)))
-            self._comp = comp
-            self.page_version += 1
-        self._hub.async_notify()
+            yt, restart = self._youtube_id(comp), None
+            if (yt is None) != (self._yt is None):  # YouTube <-> file: another player, so start over below
+                restart = self.mode
+            else:
+                if yt and yt != self._yt:
+                    await self._hub.tv.play_youtube(yt)  # warm: YouTube is up already
+                    self._yt = yt
+                elif not yt and self._backend == "pc" and (body := _pc_patch(comp, set(part))):
+                    await self._hub.pc_ambient.patch(body)
+                self._comp = comp
+                self.page_version += 1
+        if restart:
+            await self.start(restart, comp, shuffle=False)
+        else:
+            self._hub.async_notify()
 
     async def save_mode(self, mode_id: str, comp: dict) -> None:
         self._mode(mode_id)
@@ -358,7 +420,16 @@ class AmbienceManager:
     # ---- health, sleep timer, dayparts ------------------------------------------------------------
 
     async def _health(self, gen: int, _now: datetime) -> None:
-        if self._backend == "pc":
+        if self._yt:  # YouTube left the screen (HOME, another app: it keeps running hidden) or the TV went off
+            if time.monotonic() - self._started <= PAGE_GRACE_SECS:
+                return
+            try:  # an unavailable TV (the hub polls it every 30 s) counts as gone
+                info = await self._hub.tv.app_info(self._youtube_app) if self._hub.tv.available else None
+            except HomeAssistantError as err:  # one failed poll is no proof that the TV is off
+                _LOGGER.debug("YouTube status failed: %s", err)
+                return
+            gone = not (info or {}).get("visible")
+        elif self._backend == "pc":
             try:
                 gone = (await self._hub.pc_ambient.status()).get("state") == "idle"
             except HomeAssistantError as err:  # ponytail: an unreachable PC keeps the mode on; stop() still works
@@ -383,7 +454,8 @@ class AmbienceManager:
         self._hub.async_notify()
 
     async def _sleep_fade(self, gen: int, _now: datetime) -> None:  # no await: cannot interleave with start()
-        if self.uses_media and self._backend == "pc":
+        # ponytail: a YouTube visual does not fade (its volume is the TV's); it just stops at the end
+        if self.uses_media and self._backend == "pc" and not self._yt:
             self._sleep.append(self.hass.async_create_background_task(
                 self._fade_pc(dict(self._comp)), "homehub_media_fade"))
         elif self.uses_media:

@@ -17,7 +17,8 @@ Control a Samsung TV, run ambience (video, soundtrack and lights), and browse Pl
   - Power, D-pad, OK, back, home, volume, mute, play, pause, stop, rewind, fast forward, channel up and down, guide, menu, info, exit, and raw Samsung keys.
   - Launch or restart Netflix, YouTube, Prime Video, Disney+, Apple TV, Max, Plex, Jellyfin, Spotify, Twitch, Paramount+, and the TV's Browser.
   - Type into the TV's on-screen keyboard, and use a touchpad pointer in the TV browser.
-- **Ambience**: a looping video (visual) and a separate soundtrack per mode, from local files or internet radio.
+- **Ambience**: a looping video (visual) and a separate soundtrack per mode, from local files, YouTube videos, or internet radio.
+  - A mode can pick a random video from several each time it starts.
   - A mode can switch on a lighting scene and flicker chosen lights like a fire. The previous lighting comes back when the mode stops. If Home Assistant restarts while a mode runs, the previous lighting cannot be restored, because the snapshot is kept only in memory.
   - Change the visual or soundtrack while a mode runs, mark favourites, and mix the two volumes.
   - Sleep timer that fades out, and time-of-day auto ambience.
@@ -64,13 +65,13 @@ Open **Settings › Devices & services › HomeHub Media › Configure**. Every 
 
 | Menu item | What it configures |
 |---|---|
-| **TV** | Optional TV media player, an entity whose state is the current app, and the Home Assistant URL the TV uses to show ambience (empty uses the internal URL). The TV media player is used to switch inputs by source name, turn the TV on and off, and read and set the volume. |
+| **TV** | Optional TV media player, an entity whose state is the current app, and the Home Assistant URL the TV uses to show ambience (empty uses the internal URL). The TV media player is used to switch inputs by source name, turn the TV on and off, and read and set the volume. When it is set, the remote's power, volume, and mute buttons and the card's volume slider go through it (for example the core Samsung TV integration's player) instead of TV key presses. |
 | **Streaming apps** | Which apps appear on the remote, optional TV app ID overrides as `app=id` pairs, and a rescan of installed apps. |
 | **Plex and Jellyfin** | Plex URL and token (or copy both from the Plex integration), Jellyfin URL and API key, then the Jellyfin user. Each has an optional player name filter. The server is checked when you submit. Enables Continue Watching, Recently Added, and Now Playing. |
 | **Streaming box** | The remote entity that controls the box, an optional media player for channels, and how the TV switches to the box's input. |
 | **Media PC** | Host, ambient player and coordinator ports and tokens, how the TV switches to the PC's input, and the apps the PC may open. Both daemons are checked when you submit. See [media-pc/README.md](media-pc/README.md). |
 | **Keyboard bridge** | Host and shared key of the ESP32 keyboard bridge. |
-| **Ambience** | Where ambience plays (Samsung TV, or Media PC once the media PC is set up), and internet radio stations for soundtracks. |
+| **Ambience** | Where ambience plays (Samsung TV, or Media PC once the media PC is set up), internet radio stations for soundtracks, and YouTube videos for visuals (see [YouTube ambience](#youtube-ambience)). |
 | **Ambience modes** | Add, edit, or delete modes: name, icon, lighting scene, flickering lights, and a lights-only switch. Seven starter modes are included: Fireplace, Dinner, Reading, Game Night, Chill, Movie Time (lights only), and DOG TV. A new mode's ID comes from its name, for example `game_night`, and stays the same if you rename it. |
 | **Volume** | Normal volume (default 19) and quiet volume (default 10), which need the TV media player, plus an optional entity that, while it is on, blocks switching to any activity except Off. |
 | **Times of day** | Start time and ambience mode for morning, afternoon, evening, and night (defaults 06:00, 12:00, 18:00, 22:00), and the idle time before auto ambience starts (default 10 minutes, 1 to 240). No mode is set by default, so auto ambience does nothing until you choose modes here. |
@@ -153,7 +154,39 @@ To cap the output at 1080p, add `-vf "scale=-2:'min(1080,ih)'"` before `-c:v`.
 
 If the mode is running, changes apply right away, but they are kept only after you select **Save**.
 
+**Random from several videos per mode**: in the visual carousel, the shuffle button on a video adds it to the mode's rotation, and pressing it again removes it. When the rotation has videos, each start of the mode picks one of them at random, and the chosen visual is used only when the rotation is empty. A rotation can hold up to 50 videos and can mix local files and YouTube videos. The mode's tile shows "Random from N videos" when the rotation has two or more. Select **Save** to keep the rotation. In automations, `save_mode` and `ambience_update` take the rotation as `visuals`, a list of visual IDs.
+
 **Media PC users**: if ambience plays on the media PC, the videos and soundtracks live on that PC. Follow [media-pc/README.md](media-pc/README.md). Preview images for the media PC go in Home Assistant's `www/Ambience` folder as `<id>.webp` or `<id>.png`.
+
+## YouTube ambience
+
+Samsung TVs from 2021 on do not let Home Assistant open the ambience page in the TV browser (see [TV limitations](#tv-limitations)). On those TVs, use YouTube videos as visuals. They play in the TV's own YouTube app.
+
+**Add videos**
+
+1. Open **Configure › Ambience**.
+2. In **YouTube videos**, enter one video per line as `Name=link`, for example `Star night=https://www.youtube.com/watch?v=B5unCXpegAw`. Watch, share (`youtu.be`), Shorts, and live links work, and so do `m.youtube.com` and `music.youtube.com` links and a bare 11-character video ID. Extra link parameters such as `&pp=` are ignored.
+3. Select **Submit**, then **Save and close**.
+
+The videos appear in the card's visual carousel in the order you entered them, with their YouTube thumbnail and a "YouTube" label. The name is the title, and the ID comes from the name the same way as for files (`Star night` becomes `star_night`). A name without Latin letters, for example in Hebrew, gets `yt_` and the video ID in lowercase instead. If a local file already has that ID, the video gets `_2`, and so on. Assign a video to a mode like any other visual.
+
+**What happens on the TV**
+
+1. HomeHub switches the activity to Samsung TV and sets the mode's lights.
+2. It asks the TV's YouTube app to play the video over DIAL, the protocol phones use to cast to the TV.
+3. If YouTube was not running, YouTube first shows its "Who's watching?" profile picker. About 8 seconds later HomeHub presses OK on the TV, which picks the highlighted profile, and asks for the video again.
+4. About 3 seconds after that, HomeHub presses OK once more to show the video full screen.
+
+If YouTube is already open, for example when you switch from one YouTube mode to another or pick another YouTube video in the editor while the mode runs, only the last step runs. The profile picker's timing varies, so if the OK presses land too early or too late, press OK on the TV remote.
+
+Notes:
+
+- A YouTube video plays with its own sound. The mode's soundtrack, the mix, loop, and random-start settings are not used with a YouTube visual. Set the volume with the TV.
+- Without YouTube Premium, YouTube may show ads.
+- If YouTube leaves the screen (you press HOME, open another app, or turn the TV off), HomeHub notices within about a minute and a half (it checks every 30 seconds, after a one-minute grace period), stops the mode, and restores the lights. Stopping the mode closes YouTube.
+- The sleep timer does not fade a YouTube video. It stops it at the end time.
+- YouTube videos also work when ambience plays on the media PC. A YouTube mode then switches to Samsung TV, and a local-file mode switches back to the media PC.
+- DIAL must be on. It is on by default on Samsung TVs.
 
 ## Card
 
@@ -198,7 +231,8 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 
 | Service | Fields | What it does |
 |---|---|---|
-| `remote` | `command`, *`target`* | Presses a remote button. `command` is one of `up`, `down`, `left`, `right`, `select`, `back`, `home`, `power`, `play_pause`, `play`, `pause`, `stop`, `rewind`, `fast_forward`, `volume_up`, `volume_down`, `mute`, `channel_up`, `channel_down`, `guide`, `menu`, `info`, `exit`. `target` is `tv`, `box`, or `pc`, and defaults to the current activity (the TV when off). Volume and mute always go to the TV, and so does `power` sent to the PC. The PC supports only the D-pad, `select`, `back`, `home`, play and pause, and `stop`. |
+| `remote` | `command`, *`target`* | Presses a remote button. `command` is one of `up`, `down`, `left`, `right`, `select`, `back`, `home`, `power`, `play_pause`, `play`, `pause`, `stop`, `rewind`, `fast_forward`, `volume_up`, `volume_down`, `mute`, `channel_up`, `channel_down`, `guide`, `menu`, `info`, `exit`. `target` is `tv`, `box`, or `pc`, and defaults to the current activity (the TV when off). Volume and mute always go to the TV, and so does `power` sent to the PC. With the TV media player set in **Configure › TV**, the TV's `power`, `volume_up`, `volume_down`, and `mute` go through that player: `power` turns the TV off when it is on and on when it is off. Without it, `power` on a TV that is off sends Wake-on-LAN (needs the MAC address). The PC supports only the D-pad, `select`, `back`, `home`, play and pause, and `stop`. |
+| `set_volume` | `level` | Sets the TV volume to `level` (0 to 100) through the TV media player from **Configure › TV**. Fails without one. |
 | `send_key` | `key`, *`hold_secs`* | Sends a raw Samsung key such as `KEY_HDMI1` to the TV. `hold_secs` is 0 to 5. |
 | `launch_app` | `app` | Opens an app on the TV by app key (`netflix`, `youtube`, `prime_video`, `disney_plus`, `apple_tv`, `max`, `plex`, `jellyfin`, `spotify`, `twitch`, `paramount_plus`, `browser`) or by TV app ID. Switches the activity to Samsung TV and stops ambience that plays video or sound. |
 | `restart_app` | `app` | Closes and reopens an app on the TV. Same values as `launch_app`. |
@@ -209,8 +243,8 @@ All services are in the `homehub_media` domain. Fields in *italics* are optional
 | `channel` | `number` | Tunes the streaming box to a channel number of 1 to 4 digits. Needs the box's media player. |
 | `ambience_start` | `mode` | Starts a mode by ID, for example `fireplace`. |
 | `ambience_stop` | | Stops ambience and restores the lights. |
-| `ambience_update` | *`visual`*, *`visual_enabled`*, *`video_loop`*, *`video_random_start`*, *`original_volume`*, *`soundtrack`*, *`soundtrack_loop`*, *`soundtrack_random_start`*, *`soundtrack_volume`* | Changes what the running ambience plays. `visual` and `soundtrack` are media IDs (a radio station ID works as a soundtrack). The volumes are 0 to 100. Works only while a mode with video or sound is running. |
-| `save_mode` | `mode`, plus the `ambience_update` fields | Saves the fields as the mode's default. Fields you leave out get their defaults: no visual or soundtrack, loop and random start on, video volume 20, soundtrack volume 100. |
+| `ambience_update` | *`visual`*, *`visual_enabled`*, *`video_loop`*, *`video_random_start`*, *`original_volume`*, *`soundtrack`*, *`soundtrack_loop`*, *`soundtrack_random_start`*, *`soundtrack_volume`*, *`visuals`* | Changes what the running ambience plays. `visual` and `soundtrack` are media IDs (a radio station ID works as a soundtrack). The volumes are 0 to 100. `visuals` is the mode's rotation, a list of up to 50 visual IDs (see [random from several videos](#ambience-videos-and-soundtracks)); changing it does not change the running video. Switching between a YouTube video and a local file starts the mode again. Works only while a mode with video or sound is running. |
+| `save_mode` | `mode`, plus the `ambience_update` fields | Saves the fields as the mode's default. Fields you leave out get their defaults: no visual or soundtrack, an empty rotation, loop and random start on, video volume 20, soundtrack volume 100. |
 | `set_favorite` | `kind`, `media_id`, `favorite` | Marks (`favorite: true`) or unmarks a `visual` or `soundtrack` as a favourite. |
 | `ambience_auto` | | Starts the mode set for the current time of day. Fails if none is set. |
 | `ambience_sleep_timer` | `minutes` | Stops ambience after `minutes` (0 to 600). 0 cancels the timer. Needs a running mode. |
@@ -286,14 +320,17 @@ Titles and session names from Plex and Jellyfin reach the language model as untr
 
 These come from the TV, not from HomeHub.
 
-- **Pointer**: the touchpad works only where Samsung enables pointer input, such as the built-in Browser and some apps. On the TV, only move and click are available. Scroll and right-click work on the media PC only.
+- **Pointer**: the TV accepts pointer input only where Samsung enables it, such as the built-in Browser and some apps. There the card's touchpad moves the pointer and a tap clicks. Everywhere else on the TV the touchpad works as a swipe pad: every 48 pixels of swipe press an arrow key in the swipe's main direction, and a tap presses OK. The hint under the touchpad shows which mode is active, and the card remembers per browser whether you last used the D-pad or the touchpad. On the TV, only move and click are available. Scroll and right-click work on the media PC only.
 - **Typing**: text goes to a text field that has focus on the TV. Focus a search box on the TV first. Without a focused field, HomeHub types through the ESP32 keyboard bridge if you set one up. Backspace and clear also need the keyboard bridge.
 - **Deep links**: opening a specific Netflix or Disney+ title is not reliable and is not supported. Use the Plex or Jellyfin library to play a title.
 - **App IDs**: the TV cannot list its apps on 2020 and newer models, so HomeHub tries a list of known IDs for each app. IDs vary by region and year. Some built-in IDs were checked on one Samsung QE55Q60B, and others may differ on your TV. If an app is missing or opens the wrong app, use **Streaming apps** to rescan or set the ID.
 - **Plex and Jellyfin apps**: if the Plex or Jellyfin app is not installed on the TV, HomeHub opens that server's URL from **Plex and Jellyfin** in the TV browser instead.
 - **Playing a library title**: HomeHub opens the app, then waits up to 15 seconds for it to accept remote play. Plex plays through a media player from the core Plex integration. If you have more than one Plex player, set the player name filter so HomeHub picks the TV. Jellyfin plays on the configured user's most recently active session that supports remote control and matches the player name filter.
 - **Play and pause**: the remote's play/pause button sends play or pause to the TV and tracks the last key it sent, not the real player state. If playback changes without HomeHub, for example with the TV remote, the next press can do the wrong thing. The Now Playing strip uses the session's real state.
-- **Autoplay**: when TV ambience starts, HomeHub presses OK on the TV about 4 seconds later, so the browser allows sound. If the sound stays muted, press OK on the TV remote.
+- **Browser player on 2021 and newer TVs**: Samsung TVs from 2021 on (Tizen 6.5 and newer, checked on a QE55Q60B) start the browser hidden when Home Assistant asks them to open a page. Local video and soundtrack files therefore cannot play on these TVs when ambience plays on the Samsung TV, and starting such a mode fails with "This TV does not allow opening web pages remotely". Use [YouTube ambience](#youtube-ambience) or play ambience on a media PC. Lights-only modes are not affected. For the same reason, a Plex or Jellyfin server URL cannot open in the browser on these TVs.
+- **App launches**: HomeHub opens apps through the TV's REST interface, which answers at once. If the TV says the app is not installed, the launch fails with "… is not installed on the TV". Only when the REST interface itself fails does HomeHub send the launch over the remote connection, without waiting for a reply, because the TV never sends one.
+- **Remote connection while the browser is open**: the TV can send pointer events before it accepts the remote connection. HomeHub ignores them while connecting, so button presses still work.
+- **Autoplay**: when TV ambience starts in the browser, HomeHub presses OK on the TV about 4 seconds later, so the browser allows sound. If the sound stays muted, press OK on the TV remote.
 - **Ambience page closed**: if the TV's ambience page stops checking in with Home Assistant, for example because the browser was closed or the TV turned off, HomeHub stops the mode within about a minute and restores the lights.
 
 ## Media PC

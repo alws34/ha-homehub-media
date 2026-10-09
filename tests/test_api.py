@@ -116,6 +116,58 @@ async def test_library_signs_art(hass, hass_ws_client, setup_entry):
     assert res["plex"]["continue"][0]["image"].startswith("/api/homehub_media/art/plex/abc?authSig=")
 
 
+async def test_art_proxy_youtube_thumbnail_falls_back_to_hq(hass, hass_client, setup_entry, aioclient_mock):
+    thumbs = "https://i.ytimg.com/vi/B5unCXpegAw/"
+    aioclient_mock.get(thumbs + "maxresdefault.jpg", status=404)
+    aioclient_mock.get(thumbs + "hqdefault.jpg", content=b"jpg", headers={"Content-Type": "image/jpeg"})
+    client = await hass_client()
+    resp = await client.get("/api/homehub_media/art/youtube/B5unCXpegAw")
+    assert resp.status == 200 and await resp.read() == b"jpg" and resp.content_type == "image/jpeg"
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert [str(u) for _, u, *_ in aioclient_mock.mock_calls] == [thumbs + "maxresdefault.jpg", thumbs + "hqdefault.jpg"]
+    for bad in ("B5unCXpegA", "B5unCXpegAw1", "QjV1bkNYcGVnQXc="):
+        assert (await client.get(f"/api/homehub_media/art/youtube/{bad}")).status == 404
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(thumbs + "maxresdefault.jpg", content=b"<html>", headers={"Content-Type": "text/html"})
+    aioclient_mock.get(thumbs + "hqdefault.jpg", content=b"<svg/>", headers={"Content-Type": "image/svg+xml"})
+    assert (await client.get("/api/homehub_media/art/youtube/B5unCXpegAw")).status == 502  # images only
+
+
+async def test_catalog_signs_youtube_previews_and_hides_video_ids(hass, hass_ws_client, setup_entry):
+    hub = setup_entry.runtime_data
+    hub.options["ambience"] = {**hub.options["ambience"], "youtube": {"Star night": "https://youtu.be/B5unCXpegAw"}}
+    await hub.ambience.refresh_catalog()
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "homehub_media/catalog"})
+    visual = (await ws.receive_json())["result"]["visuals"][-1]
+    assert visual["id"] == "star_night" and visual["source_type"] == "youtube" and "youtube_id" not in visual
+    assert visual["preview"].startswith("/api/homehub_media/art/youtube/B5unCXpegAw?authSig=")
+
+
+async def test_visuals_through_the_service_schemas(hass, setup_entry):
+    amb = setup_entry.runtime_data.ambience
+    await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": ["rain", "fire", "rain"]},
+                                   blocking=True)
+    assert amb.composition("chill")["visuals"] == ["rain", "fire"]
+    await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": "rain"}, blocking=True)
+    assert amb.composition("chill")["visuals"] == ["rain"]  # one id is a list of one
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": [f"v{i}" for i in range(51)]},
+                                       blocking=True)
+    with pytest.raises(ServiceValidationError):  # ids are checked by the manager
+        await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": ["../x"]}, blocking=True)
+    amb.update = AsyncMock()
+    await hass.services.async_call(DOMAIN, "ambience_update", {"visuals": ["fire", "rain"]}, blocking=True)
+    amb.update.assert_awaited_once_with({"visuals": ["fire", "rain"]})
+
+
+async def test_set_volume_service(hass, setup_entry):
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "set_volume", {"level": 101}, blocking=True)
+    with pytest.raises(ServiceValidationError, match="TV media player"):
+        await hass.services.async_call(DOMAIN, "set_volume", {"level": 30}, blocking=True)
+
+
 def test_services_yaml_matches_schemas():
     from homeassistant.util.yaml import load_yaml_dict
 
@@ -123,6 +175,16 @@ def test_services_yaml_matches_schemas():
     described = load_yaml_dict(str(Path(__file__).parents[1] / "custom_components/homehub_media/services.yaml"))
     assert {name: set((described[name] or {}).get("fields", {})) for name in described} == {
         name: {str(key) for key in schema} for name, (schema, _) in SERVICES.items()}
+
+
+def test_every_service_field_is_translated():
+    import json
+
+    from custom_components.homehub_media.api import SERVICES
+    names = json.loads((Path(__file__).parents[1] / "custom_components/homehub_media/translations/en.json")
+                       .read_text())["services"]
+    assert {n: set(names[n].get("fields", {})) for n in names} == {
+        n: {str(key) for key in schema} for n, (schema, _) in SERVICES.items()}
 
 
 async def test_service_calls_hub_and_records_command(hass, setup_entry):

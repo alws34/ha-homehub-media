@@ -6,10 +6,12 @@ import vm from "node:vm";
 const src = readFileSync(new URL("../../custom_components/homehub_media/www/homehub-media-card.js", import.meta.url), "utf8");
 let Card;
 const ctx = { window: { __HOMEHUB_TEST__: true, customCards: [] }, customElements: { get: () => undefined, define: (_, c) => { Card = c; } },
-              HTMLElement: class {}, CustomEvent: class {}, localStorage: { getItem() {}, setItem() {} }, location: { origin: "http://ha" } };
+              HTMLElement: class {}, CustomEvent: class {}, localStorage: { getItem() {}, setItem() {} }, location: { origin: "http://ha" },
+              setTimeout, clearTimeout, performance };
 ctx.window.window = ctx.window;
 vm.createContext(ctx); vm.runInContext(src, ctx);
-const { esc, mixToVolumes, nextTarget, textRoute, canSeek } = ctx.window.__homehubTest;
+const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider } = ctx.window.__homehubTest;
+const plain = (v) => JSON.parse(JSON.stringify(v));  // values from the card's realm, for deepStrictEqual
 
 test("esc neutralises markup", () => {
   assert.equal(esc(`<img src=x onerror="a">'`), "&lt;img src=x onerror=&quot;a&quot;&gt;&#39;");
@@ -59,4 +61,99 @@ test("seek buttons are hidden while the PC is the activity", () => {
   assert.equal(canSeek(snap(false, false, "pc")), false);
   assert.equal(canSeek(snap(false, false, "tv")), true);
   assert.equal(canSeek(undefined), true);
+});
+
+test("rotation toggle adds and removes an id, keeps order and the cap", () => {
+  assert.deepEqual(plain(toggleIn(undefined, "rain")), ["rain"]);
+  assert.deepEqual(plain(toggleIn(["rain", "fire"], "sea")), ["rain", "fire", "sea"]);
+  assert.deepEqual(plain(toggleIn(["rain", "fire", "sea"], "fire")), ["rain", "sea"]);
+  const full = Array.from({ length: 50 }, (_, i) => `v${i}`);
+  assert.equal(toggleIn(full, "one_more").length, 50);  // the backend rejects more than 50
+  assert.equal(toggleIn(full, "v3").length, 49);
+});
+test("mode tiles say when a mode picks from several videos", () => {
+  assert.equal(randomLabel({ visuals: ["rain", "fire", "sea"] }), "Random from 3 videos");
+  assert.equal(randomLabel({ visuals: ["rain"] }), "");
+  assert.equal(randomLabel(undefined), "");
+});
+test("rotation chip toggles the browsed visual and goes live while the mode runs", () => {
+  const calls = [];
+  const card = Object.assign(Object.create(Card.prototype), {
+    _snap: { ambience: { mode: "chill" } }, _noClickUntil: 0, _render() {}, _call: (...a) => calls.push(a),
+    _catalog: { visuals: [{ id: "rain" }, { id: "fire" }], soundtracks: [] }, _browse: { visual: "fire" },
+    _edit: { id: "chill", draft: { visual: "rain", visuals: ["rain"] }, pending: null },
+  });
+  const click = () => card._onClick({ target: { closest: () => ({ dataset: { a: "rot" }, disabled: false }) } });
+  click();
+  assert.deepEqual(plain(card._edit.draft.visuals), ["rain", "fire"]);
+  card._flushLive(card._edit);
+  assert.deepEqual(plain(calls), [["ambience_update", { visuals: ["rain", "fire"] }]]);
+  click();
+  assert.deepEqual(plain(card._edit.draft.visuals), ["rain"]);
+  card._flushLive(card._edit);
+});
+test("volume slider only when the TV volume is known (the TV media player)", () => {
+  assert.equal(volumeSlider(null), "");
+  assert.equal(volumeSlider(undefined), "");
+  assert.match(volumeSlider(0), /<input type="range"[^>]* data-volume/);
+});
+
+// drives the card's real touchpad handlers; every service call resolves at once
+const padCard = (pointerActive) => {
+  const calls = [];
+  const card = Object.assign(Object.create(Card.prototype), {
+    _snap: { tv: { pointer_active: pointerActive }, targets: {} }, _target: "tv", _pointers: new Map(),
+    _mv: { dx: 0, dy: 0 }, _sc: 0, _arrows: [], _call: (...a) => { calls.push(a); return Promise.resolve(true); },
+  });
+  const ev = (type, x, y = 0) => ({ type, pointerId: 1, isPrimary: true, clientX: x, clientY: y, preventDefault() {} });
+  const drag = (to, step = 10) => {
+    card._tpDown(ev("pointerdown", 0), { setPointerCapture() {} });
+    for (let x = step; x <= to; x += step) card._tpMove(ev("pointermove", x));
+    card._tpUp(ev("pointerup", to));
+  };
+  return { card, calls, drag };
+};
+const settle = () => new Promise((r) => setTimeout(r, 80));
+
+test("swipe mode: 100 px right presses right twice, one request at a time", async () => {
+  const { calls, drag } = padCard(false);
+  drag(100);
+  assert.equal(calls.length, 1);  // the second arrow waits for the first request
+  await settle();
+  assert.deepEqual(plain(calls), [["remote", { command: "right", target: "tv" }], ["remote", { command: "right", target: "tv" }]]);
+});
+test("swipe mode: a fast 3-step swipe in one move still sends 3 arrows; vertical goes up/down", async () => {
+  const { calls, drag } = padCard(false);
+  drag(150, 150);
+  await settle();
+  assert.equal(calls.filter(([, d]) => d.command === "right").length, 3);
+  const v = padCard(false);
+  v.card._tpDown({ pointerId: 1, isPrimary: true, clientX: 0, clientY: 0, preventDefault() {} }, {});
+  v.card._tpMove({ pointerId: 1, clientX: 5, clientY: -60, preventDefault() {} });
+  await settle();
+  assert.deepEqual(plain(v.calls), [["remote", { command: "up", target: "tv" }]]);
+});
+test("swipe mode: a tap is OK", async () => {
+  const { calls, drag } = padCard(false);
+  drag(0);
+  await settle();
+  assert.deepEqual(plain(calls), [["remote", { command: "select", target: "tv" }]]);
+});
+test("pointer mode (TV browser): drag moves and tap clicks, as before", async () => {
+  const { calls, drag } = padCard(true);
+  drag(30);
+  await settle();
+  drag(0);
+  await settle();
+  assert.deepEqual(plain(calls).map(([s, d]) => [s, d.action, d.target]), [["pointer", "move", "tv"], ["pointer", "click", "tv"]]);
+});
+test("volume slider sends one debounced set_volume", async () => {
+  const calls = [];
+  const card = Object.assign(Object.create(Card.prototype), { _call: (...a) => calls.push(a) });
+  const input = (value) => ({ composedPath: () => [{ value, matches: (s) => s === "[data-volume]", style: { setProperty() {} } }] });
+  card._onInput(input("20"));
+  card._onInput(input("42.4"));
+  assert.equal(calls.length, 0);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(plain(calls), [["set_volume", { level: 42 }]]);
 });

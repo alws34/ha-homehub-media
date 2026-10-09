@@ -83,6 +83,15 @@ pointer:
       selector:
         select:
           options: [tv, pc]
+set_volume:
+  fields:
+    level:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
 set_activity:
   fields:
     activity:
@@ -143,6 +152,11 @@ ambience_update:
           min: 0
           max: 100
           unit_of_measurement: "%"
+    visuals:
+      example: "[fireplace, rain]"
+      selector:
+        text:
+          multiple: true
 save_mode:
   fields:
     mode:
