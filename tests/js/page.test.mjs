@@ -32,17 +32,18 @@ function fakeEl(hidden = false) {
 
 function load({ search = "", fetchImpl } = {}) {
   const els = { v: fakeEl(), a: fakeEl(), hint: fakeEl(true) };
-  const docL = {}, timers = [], raf = [], fetched = [];
+  const docL = {}, timers = [], raf = [], fetched = [], fetchOpts = [];
   const clock = { now: 0 };
   const ctx = {
-    URL, URLSearchParams,
+    URL, URLSearchParams, AbortController,
     document: {
       getElementById: (id) => els[id],
       addEventListener: (t, f) => (docL[t] ||= []).push(f),
     },
     location: { origin: ORIGIN, search, href: `${ORIGIN}/homehub_media_static/ambience.html${search}` },
-    fetch: (u, o) => { fetched.push(u); return (fetchImpl || (() => new Promise(() => {})))(u, o); },
-    setTimeout: (f, ms) => timers.push({ f, ms }),
+    fetch: (u, o) => { fetched.push(u); fetchOpts.push(o); return (fetchImpl || (() => new Promise(() => {})))(u, o); },
+    setTimeout: (f, ms) => { const x = { f, ms }; timers.push(x); return x; },
+    clearTimeout: (x) => { const i = timers.indexOf(x); if (i >= 0) timers.splice(i, 1); },
     requestAnimationFrame: (f) => raf.push(f),
     Date: { now: () => clock.now },
   };
@@ -50,7 +51,7 @@ function load({ search = "", fetchImpl } = {}) {
   vm.createContext(ctx);
   vm.runInContext("Math.random = () => 0.5", ctx);
   vm.runInContext(script, ctx);
-  return { t: ctx.__ambienceTest, els, docL, timers, raf, fetched, clock };
+  return { t: ctx.__ambienceTest, els, docL, timers, raf, fetched, fetchOpts, clock };
 }
 
 const vis = (url, extra = {}) => ({ url, loop: true, random_start: true, volume: 0.2, ...extra });
@@ -86,6 +87,15 @@ test("https stream is allowed for soundtrack only", () => {
   assert.equal(t.layerOk({ url: "/media/a.mp3" }, "soundtrack"), true);
   assert.equal(t.layerOk({ url: "http://evil/a.mp3", stream: true }, "soundtrack"), false);
   assert.equal(t.layerOk(null, "visual"), false);
+  for (const url of ["https://[", "https:", "//radio.example/live", "ftp://radio.example/live", "javascript:alert(1)"]) {
+    assert.equal(t.layerOk({ url, stream: true }, "soundtrack"), false, url);
+  }
+});
+
+test("a malformed stream URL is rejected without throwing", () => {
+  const { t, els } = load();
+  t.apply(st(1, { soundtrack: { url: "https://[", stream: true, volume: 1 } }));
+  assert.equal(els.a.srcSets, 0);
 });
 
 test("apply loads layers, reloads only when the URL changes (authSig ignored)", () => {
@@ -210,6 +220,69 @@ test("polling: uses signed next, backs off to 10 s on errors, recovers to 1 s", 
   await step();
   assert.equal(fetched.at(-1), "/api/homehub_media/page/state?authSig=s2");
   assert.equal(els.v.srcSets, 1);             // versions 1 and 2 carry the same URL: one load
+});
+
+test("a hung poll is aborted after 10 s, with no redirects and no caching, then backs off", async () => {
+  const { timers, fetchOpts } = load({
+    search: `?s=${encodeURIComponent(SIG)}`,
+    fetchImpl: (u, o) => new Promise((_, rej) => o.signal.addEventListener("abort", () => rej(new Error("aborted")))),
+  });
+  assert.equal(fetchOpts[0].redirect, "error");
+  assert.equal(fetchOpts[0].cache, "no-store");
+  assert.deepEqual(timers.map((x) => x.ms), [10000]);
+  assert.equal(fetchOpts[0].signal.aborted, false);
+  timers.shift().f();
+  assert.equal(fetchOpts[0].signal.aborted, true);
+  await drain();
+  assert.deepEqual(timers.map((x) => x.ms), [2000]);
+});
+
+// Live polling against a fake server whose state (and signature) changes with every request.
+function pollEnv(mkState) {
+  let n = 0;
+  const env = load({
+    search: `?s=${encodeURIComponent(SIG)}`,
+    fetchImpl: () => Promise.resolve({ ok: true, json: async () => mkState(++n) }),
+  });
+  const take = (ms) => { const x = env.timers.find((y) => y.ms === ms); if (x) env.timers.splice(env.timers.indexOf(x), 1); return x; };
+  env.runRetry = () => take(5000)?.f();
+  env.hasRetry = () => env.timers.some((y) => y.ms === 5000);
+  env.poll = async () => { await drain(); take(1000).f(); await drain(); };
+  return env;
+}
+
+test("a media error re-polls for fresh signed URLs instead of reloading the stale one", async () => {
+  const env = pollEnv((n) => st(1, { visual: vis(`/media/fire.mp4?authSig=k${n}`) }));
+  const { els } = env;
+  await drain();
+  assert.equal(els.v.src, `${ORIGIN}/media/fire.mp4?authSig=k1`);
+
+  els.v.error = { code: 4 }; els.v.fire("error");
+  els.v.error = null;                      // recovered by itself within 5 s
+  env.runRetry(); await env.poll();
+  assert.equal(els.v.srcSets, 1);
+
+  els.v.error = { code: 4 }; els.v.fire("error");
+  env.runRetry(); await env.poll();        // still broken: next poll re-applies the same version
+  assert.equal(els.v.srcSets, 2);
+  assert.equal(els.v.src, `${ORIGIN}/media/fire.mp4?authSig=k${env.fetched.length}`);
+  assert.notEqual(els.v.src, `${ORIGIN}/media/fire.mp4?authSig=k1`);
+});
+
+test("stream soundtracks retry when the server ends them; other layers do not", async () => {
+  const env = pollEnv(() => st(1, {
+    visual: vis("/media/fire.mp4", { loop: false }),
+    soundtrack: { url: "https://radio.example/live", stream: true, loop: false, volume: 1 },
+  }));
+  const { els } = env;
+  await drain();
+  els.v.ended = true; els.v.fire("ended");
+  assert.equal(env.hasRetry(), false);
+  els.a.ended = true; els.a.fire("ended");
+  assert.equal(env.hasRetry(), true);
+  env.runRetry(); await env.poll();
+  assert.equal(els.a.srcSets, 2);
+  assert.equal(els.v.srcSets, 1);
 });
 
 test("no polling without a same-origin s parameter", () => {

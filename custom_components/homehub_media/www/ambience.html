@@ -32,8 +32,10 @@
   function clampVolume(v) { v = Number(v); return v >= 0 ? (v > 1 ? 1 : v) : 0; } // NaN -> 0
   // Same-origin only; the single exception is an https radio stream on the soundtrack layer.
   function layerOk(d, kind) {
-    return !!d && typeof d.url === "string" && (sameOrigin(d.url) ||
-      (kind === "soundtrack" && d.stream === true && /^https:\/\//i.test(d.url)));
+    if (!d || typeof d.url !== "string") return false;
+    if (sameOrigin(d.url)) return true;
+    if (kind !== "soundtrack" || d.stream !== true) return false;
+    try { return new URL(d.url).protocol === "https:"; } catch (e) { return false; } // absolute https only
   }
   // Identity of a media URL: signed URLs are re-minted per poll, so ignore the signature.
   function keyOf(url) { var x = new URL(url, location.href); x.searchParams.delete("authSig"); return x.href; }
@@ -57,15 +59,19 @@
   document.addEventListener("click", unlock);
 
   function mk(el) {
-    var l = { el: el, key: null, seek: false };
+    var l = { el: el, key: null, seek: false, stream: false };
     el.addEventListener("loadedmetadata", function () { // random start: once per URL
       if (!l.seek) return;
       l.seek = false;
       if (isFinite(el.duration)) el.currentTime = Math.random() * Math.max(0, el.duration - 0.5);
     });
-    el.addEventListener("error", function () { // ponytail: blind retry every 5 s while the error persists
-      setTimeout(function () { if (l.key && el.error) { el.load(); play(el); } }, 5000);
-    });
+    // Retry after 5 s by forgetting the layer and the version: the next poll re-applies the state with
+    // freshly signed URLs (reloading the old signed URL would 401 forever once its signature expires).
+    function retry() {
+      setTimeout(function () { if (l.key && (el.error || el.ended)) { l.key = null; ver = null; } }, 5000);
+    }
+    el.addEventListener("error", retry);
+    el.addEventListener("ended", function () { if (l.stream) retry(); }); // radio server closed the connection
     return l;
   }
   var lv = mk(V), la = mk(A), fade = null, ver = null, fails = 0;
@@ -79,6 +85,7 @@
     if (!layerOk(d, kind)) return clear(l);
     var url = new URL(d.url, location.href).href, k = keyOf(url);
     l.el.loop = !!d.loop;
+    l.stream = d.stream === true;
     if (!fade) l.el.volume = clampVolume(d.volume);
     if (l.key !== k) { l.key = k; l.seek = !!d.random_start; l.el.src = url; play(l.el); }
   }
@@ -105,7 +112,8 @@
 
   var next = new URLSearchParams(location.search).get("s");
   function tick() {
-    fetch(next, { cache: "no-store" })
+    var ac = new AbortController(), to = setTimeout(function () { ac.abort(); }, 10000); // a hung request must not stall polling
+    fetch(next, { cache: "no-store", redirect: "error", signal: ac.signal })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (st) {
         fails = 0;
@@ -114,7 +122,7 @@
         if (st.version !== ver) { ver = st.version; apply(st); }
       })
       .catch(function () { fails++; }) // keep playing; back off 2 s, 4 s, 8 s, then 10 s
-      .then(function () { setTimeout(tick, fails ? Math.min(10000, 1000 * Math.pow(2, fails)) : 1000); });
+      .then(function () { clearTimeout(to); setTimeout(tick, fails ? Math.min(10000, 1000 * Math.pow(2, fails)) : 1000); });
   }
   if (next && sameOrigin(next)) tick();
 
