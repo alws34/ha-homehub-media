@@ -301,7 +301,7 @@ class FakeLounge:
 
     def __init__(self, name, listener, logger=None):
         self.listener, self.loaded, self.paired, self.played, self.autoplay = listener, None, None, [], None
-        self.screen, self.token, self.live, self.disconnected = None, None, False, False
+        self.screen, self.token, self.live, self.disconnected, self.seeks = None, None, False, False, []
         self.auth = SimpleNamespace(serialize=lambda: {"version": 0, "screenId": self.screen,
                                                        "loungeIdToken": self.token, "refreshToken": None, "expiry": None})
         FakeLounge.made.append(self)
@@ -327,6 +327,7 @@ class FakeLounge:
         if FakeLounge.on_play:
             await FakeLounge.on_play(self, video_id)
         return True
+    async def seek_to(self, time): self.seeks.append(time); return True
     async def disconnect(self): self.live, self.disconnected = False, True; return True
 
 
@@ -401,7 +402,7 @@ async def test_youtube_loops_on_ended_until_stopped(hass, aioclient_mock, lounge
 async def test_play_youtube_cold_start_retries_after_the_session_drops(hass, aioclient_mock, lounge, monkeypatch):
     aioclient_mock.clear_requests()
     aioclient_mock.get(BASE + "111299001912", json={"running": False, "visible": False})
-    aioclient_mock.post(BASE + "111299001912", json=True)
+    aioclient_mock.post(DIAL, status=201)
     aioclient_mock.get(DIAL, text=dial_xml("running", "<screenId>SCREEN</screenId>"))
     aioclient_mock.delete(DIAL + "/run", status=200)
     async def app_starting(api, video_id):  # accepted, then the app start drops the session: no NowPlaying
@@ -418,7 +419,8 @@ async def test_play_youtube_cold_start_retries_after_the_session_drops(hass, aio
     first, second = lounge.made
     assert first.played == second.played == [VID] and sleeps == [1]
     assert second.loaded == first.auth.serialize() and second.paired is None  # reconnected with the saved auth
-    assert ("POST", URL(BASE + "111299001912")) in [c[:2] for c in aioclient_mock.mock_calls]  # REST launch
+    calls = [c[:2] for c in aioclient_mock.mock_calls]
+    assert ("POST", URL(DIAL)) in calls and ("POST", URL(BASE + "111299001912")) not in calls  # DIAL, not REST
     await tv.stop_youtube("111299001912")
 
 
@@ -433,6 +435,19 @@ async def test_play_youtube_drops_a_session_that_ignores_plays(hass, aioclient_m
         await tv.play_youtube(VID, "111299001912")
     first, second = lounge.made
     assert first.disconnected and second.played == [VID]  # a fresh session, not the deaf one again
+    await tv.stop_youtube("111299001912")
+
+
+async def test_play_youtube_from_0_and_same_video_again(hass, aioclient_mock, lounge):
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    await tv.play_youtube(VID, "111299001912")
+    api = lounge.made[0]
+    resumed = PlaybackStateEvent({"currentTime": "680", "duration": "3000", "state": "1"})
+    await api.listener.playback_state_changed(resumed)  # YouTube resumed where it was last watched
+    await api.listener.playback_state_changed(resumed)
+    assert api.seeks == [0]  # once
+    await tv.play_youtube(VID, "111299001912")  # the same mode again: no NowPlaying would come, so no wait
+    assert api.played == [VID] and api.seeks == [0, 0]
     await tv.stop_youtube("111299001912")
 
 
