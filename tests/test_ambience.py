@@ -349,3 +349,130 @@ async def test_superseded_activity_opens_no_page(hass):
     await asyncio.wait_for(starting, 1)
     hub.tv.open_url.assert_not_awaited()
     assert am.mode == "off" and hub.activity.current == "off"
+
+
+# --- YouTube visuals and the random visual pool ----------------------------------------------------------
+
+YT = {"id": "star_night", "kind": "visual", "title": "Star night", "source_type": "youtube", "live": False,
+      "duration": None, "youtube_id": "B5unCXpegAw", "preview": "/api/homehub_media/art/youtube/B5unCXpegAw",
+      "favorite": False}
+FIRE = {**YT, "id": "fire", "title": "Fire", "youtube_id": "fireFIREfir"}
+
+
+async def yt_manager(hass, backend="tv", scene=None):
+    am = await manager(hass, chill(backend, scene=scene))
+    am._catalog["visuals"] += [dict(YT), dict(FIRE)]
+    return am
+
+
+async def test_youtube_start_plays_in_the_tv_app_and_stop_restores_lights(hass):
+    async_mock_service(hass, "scene", "create"); on = async_mock_service(hass, "scene", "turn_on")
+    hass.states.async_set("scene.chill", "x", {"entity_id": ["light.a"]})
+    am = await yt_manager(hass, scene="scene.chill")
+    order = []
+    am._hub.activity.set.side_effect = lambda a: order.append(("set", a, am.mode)) or True
+    am._hub.tv.play_youtube.side_effect = lambda v: order.append(("play", v, am.mode))
+    await am.start("chill", {"visual": "star_night", "soundtrack": "rain"})  # the soundtrack is not used
+    assert order == [("set", "tv", "off"), ("play", "B5unCXpegAw", "chill")]  # the TV first, then the mode
+    assert [c.data["entity_id"] for c in on] == ["scene.chill"] and am.page_state(am._sid) is None
+    am._hub.tv.open_url.assert_not_awaited()
+    await am.stop()
+    am._hub.tv.stop_youtube.assert_awaited_once()
+    am._hub.tv.send_key.assert_not_awaited()  # YouTube is closed over DIAL, no HOME key
+    assert on[-1].data["entity_id"] == "scene.homehub_media_snapshot" and am.mode == "off"
+
+
+async def test_youtube_on_the_pc_backend_plays_on_the_tv(hass):
+    am = await yt_manager(hass, "pc")
+    am._hub.pc_ambient = pc = AsyncMock()
+    await am.start("chill", {"visual": "star_night"})
+    am._hub.activity.set.assert_awaited_once_with("tv")
+    pc.play.assert_not_awaited()
+    await am.update({"original_volume": 50, "soundtrack": "rain"})  # nothing to change on YouTube
+    await am.update({"visual": "fire"})  # another video: warm, YouTube stays up
+    assert [c.args[0] for c in am._hub.tv.play_youtube.await_args_list] == ["B5unCXpegAw", "fireFIREfir"]
+    am._hub.tv.stop_youtube.assert_not_awaited()
+    pc.patch.assert_not_awaited()
+    await am.stop()
+    am._hub.tv.stop_youtube.assert_awaited_once()
+    pc.stop.assert_not_awaited()
+
+
+async def test_youtube_health_stops_when_the_app_was_closed(hass):
+    am = await yt_manager(hass)
+    tv = am._hub.tv
+    tv.youtube_state.return_value = "stopped"
+    await am.start("chill", {"visual": "star_night"})
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=31))  # grace period: not asked yet
+    await hass.async_block_till_done()
+    assert am.mode == "chill" and tv.youtube_state.await_count == 0
+    am._started = time.monotonic() - 100
+    tv.youtube_state.return_value = "unknown"  # TV unreachable: keep the mode
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=62))
+    await hass.async_block_till_done()
+    assert am.mode == "chill"
+    tv.youtube_state.return_value = "stopped"
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=93))
+    await hass.async_block_till_done()
+    assert am.mode == "off"
+    tv.stop_youtube.assert_awaited_once()
+
+
+async def test_youtube_mode_switch_is_warm_and_file_switch_starts_over(hass):
+    am = await yt_manager(hass)
+    tv = am._hub.tv
+    am._hub.activity.current = "tv"; tv.available = True
+    await am.start("chill", {"visual": "star_night"})
+    await am.start("chill", {"visual": "fire"})  # YouTube to YouTube: no stop, no profile picker again
+    tv.stop_youtube.assert_not_awaited()
+    await am.update({"visual": "rain"})  # a file plays in another player: the mode starts over
+    tv.stop_youtube.assert_awaited_once()
+    tv.open_url.assert_awaited_once()
+    assert am.mode == "chill" and am._comp["visual"] == "rain" and am._yt is None
+    await am.update({"visual": "star_night"})  # and back: the page goes HOME, YouTube plays
+    assert call("KEY_HOME") in tv.send_key.await_args_list and am._yt == "B5unCXpegAw"
+    assert [c.args[0] for c in tv.play_youtube.await_args_list] == ["B5unCXpegAw", "fireFIREfir", "B5unCXpegAw"]
+    await am.stop()
+
+
+async def test_visuals_pool_picks_a_random_visual_each_start(hass, monkeypatch):
+    am = await yt_manager(hass, "pc")
+    am._hub.pc_ambient = pc = AsyncMock()
+    pools = []
+    monkeypatch.setattr("custom_components.homehub_media.ambience.random.choice",
+                        lambda pool: pools.append(list(pool)) or pool[-1])
+    await am.save_mode("chill", {"visual": "rain", "visuals": ["rain", "ghost", "star_night"]})
+    await am.start("chill")
+    assert pools == [["rain", "star_night"]]  # ids no longer in the catalog are skipped
+    am._hub.activity.set.assert_awaited_with("tv")  # star_night is a YouTube video
+    am._hub.tv.play_youtube.assert_awaited_once_with("B5unCXpegAw")
+    assert am.snapshot()["compositions"]["chill"]["visuals"] == ["rain", "ghost", "star_night"]
+    monkeypatch.setattr("custom_components.homehub_media.ambience.random.choice", lambda pool: pool[0])
+    await am.start("chill")  # this time a file on the PC
+    body = pc.play.await_args.args[0]
+    assert body["visual"] == "rain" and "visuals" not in body  # the PC gets one resolved visual
+    await am.update({"visuals": ["rain"]})  # changes the pool for the next start, nothing restarts
+    pc.patch.assert_not_awaited()  # an empty PATCH is an error on the PC
+    assert am._comp["visual"] == "rain" and am._comp["visuals"] == ["rain"]
+    await am.stop()
+
+
+async def test_refresh_catalog_adds_youtube_for_both_backends(hass, tmp_path):
+    hass.config.media_dirs = {"local": str(tmp_path)}
+    vids = tmp_path / "homehub/ambience/videos"; vids.mkdir(parents=True)
+    (vids / "Star Night.mp4").write_bytes(b"x")
+    opts = chill()
+    opts["ambience"]["youtube"] = {"Star night": "https://youtu.be/B5unCXpegAw", "Fire": "fireFIREfir"}
+    am = AmbienceManager(hass, hub_with(opts), HomeHubStore(hass))
+    await am.async_load()
+    await am.refresh_catalog()
+    visuals = am.catalog()["visuals"]
+    assert [(v["id"], v["source_type"]) for v in visuals] == [
+        ("star_night", "file"), ("star_night_2", "youtube"), ("fire", "youtube")]
+    assert visuals[1]["preview"] == "/api/homehub_media/art/youtube/B5unCXpegAw"
+    assert all("youtube_id" not in v for v in visuals)
+    opts["ambience"]["backend"] = "pc"
+    am._hub.pc_ambient = pc = AsyncMock()
+    pc.catalog.return_value = {"visuals": [], "soundtracks": []}
+    await am.refresh_catalog()
+    assert [v["id"] for v in am.catalog()["visuals"]] == ["star_night", "fire"]

@@ -6,10 +6,12 @@ import vm from "node:vm";
 const src = readFileSync(new URL("../../custom_components/homehub_media/www/homehub-media-card.js", import.meta.url), "utf8");
 let Card;
 const ctx = { window: { __HOMEHUB_TEST__: true, customCards: [] }, customElements: { get: () => undefined, define: (_, c) => { Card = c; } },
-              HTMLElement: class {}, CustomEvent: class {}, localStorage: { getItem() {}, setItem() {} }, location: { origin: "http://ha" } };
+              HTMLElement: class {}, CustomEvent: class {}, localStorage: { getItem() {}, setItem() {} }, location: { origin: "http://ha" },
+              setTimeout, clearTimeout, performance };
 ctx.window.window = ctx.window;
 vm.createContext(ctx); vm.runInContext(src, ctx);
-const { esc, mixToVolumes, nextTarget, textRoute, canSeek } = ctx.window.__homehubTest;
+const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel } = ctx.window.__homehubTest;
+const plain = (v) => JSON.parse(JSON.stringify(v));  // values from the card's realm, for deepStrictEqual
 
 test("esc neutralises markup", () => {
   assert.equal(esc(`<img src=x onerror="a">'`), "&lt;img src=x onerror=&quot;a&quot;&gt;&#39;");
@@ -59,4 +61,44 @@ test("seek buttons are hidden while the PC is the activity", () => {
   assert.equal(canSeek(snap(false, false, "pc")), false);
   assert.equal(canSeek(snap(false, false, "tv")), true);
   assert.equal(canSeek(undefined), true);
+});
+
+test("rotation toggle adds and removes an id, keeps order and the cap", () => {
+  assert.deepEqual(plain(toggleIn(undefined, "rain")), ["rain"]);
+  assert.deepEqual(plain(toggleIn(["rain", "fire"], "sea")), ["rain", "fire", "sea"]);
+  assert.deepEqual(plain(toggleIn(["rain", "fire", "sea"], "fire")), ["rain", "sea"]);
+  const full = Array.from({ length: 50 }, (_, i) => `v${i}`);
+  assert.equal(toggleIn(full, "one_more").length, 50);  // the backend rejects more than 50
+  assert.equal(toggleIn(full, "v3").length, 49);
+});
+test("mode tiles say when a mode picks from several videos", () => {
+  assert.equal(randomLabel({ visuals: ["rain", "fire", "sea"] }), "Random from 3 videos");
+  assert.equal(randomLabel({ visuals: ["rain"] }), "");
+  assert.equal(randomLabel(undefined), "");
+});
+test("rotation chip toggles the browsed visual and goes live while the mode runs", () => {
+  const calls = [];
+  const card = Object.assign(Object.create(Card.prototype), {
+    _snap: { ambience: { mode: "chill" } }, _noClickUntil: 0, _render() {}, _call: (...a) => calls.push(a),
+    _catalog: { visuals: [{ id: "rain" }, { id: "fire" }], soundtracks: [] }, _browse: { visual: "fire" },
+    _edit: { id: "chill", draft: { visual: "rain", visuals: ["rain"] }, pending: null },
+  });
+  const click = () => card._onClick({ target: { closest: () => ({ dataset: { a: "rot" }, disabled: false }) } });
+  click();
+  assert.deepEqual(plain(card._edit.draft.visuals), ["rain", "fire"]);
+  card._flushLive(card._edit);
+  assert.deepEqual(plain(calls), [["ambience_update", { visuals: ["rain", "fire"] }]]);
+  click();
+  assert.deepEqual(plain(card._edit.draft.visuals), ["rain"]);
+  card._flushLive(card._edit);
+});
+test("volume slider sends one debounced set_volume", async () => {
+  const calls = [];
+  const card = Object.assign(Object.create(Card.prototype), { _call: (...a) => calls.push(a) });
+  const input = (value) => ({ composedPath: () => [{ value, matches: (s) => s === "[data-volume]", style: { setProperty() {} } }] });
+  card._onInput(input("20"));
+  card._onInput(input("42.4"));
+  assert.equal(calls.length, 0);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.deepEqual(plain(calls), [["set_volume", { level: 42 }]]);
 });

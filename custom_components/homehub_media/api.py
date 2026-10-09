@@ -19,7 +19,7 @@ from homeassistant.helpers.service import async_register_admin_service
 from .ambience import STATE_PATH
 from .const import ACTIVITIES, COMMANDS, DOMAIN, SIGNAL_UPDATE, TARGETS, TEXT_MAX
 from .hub import Hub, loaded_hub, sign
-from .library import ART_MAX
+from .library import ART_MAX, YouTubeArt
 
 ART_KEY_RE = re.compile(r"[A-Za-z0-9_=-]{1,512}")
 ART_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}  # never SVG/HTML from HA's origin
@@ -96,6 +96,7 @@ COMPOSITION = {  # types only; the ambience manager validates ids and the merged
     vol.Optional("original_volume"): _PCT, vol.Optional("soundtrack"): vol.Any(None, cv.string),
     vol.Optional("soundtrack_loop"): cv.boolean, vol.Optional("soundtrack_random_start"): cv.boolean,
     vol.Optional("soundtrack_volume"): _PCT,
+    vol.Optional("visuals"): vol.All(cv.ensure_list, [cv.string], vol.Length(max=50)),
 }
 ADMIN_SERVICES = ("rescan_apps",)  # writes the config entry; a media-folder rescan is harmless for any user
 SERVICES: dict[str, tuple[dict, Any]] = {
@@ -113,6 +114,8 @@ SERVICES: dict[str, tuple[dict, Any]] = {
     "pointer": ({vol.Required("action"): vol.In(("move", "click", "right_click", "scroll")),
                  vol.Optional("dx"): _DELTA, vol.Optional("dy"): _DELTA, vol.Optional("target"): vol.In(("tv", "pc"))},
                 lambda hub, d: hub.pointer(**d)),
+    "set_volume": ({vol.Required("level"): vol.All(vol.Coerce(int), vol.Range(0, 100))},
+                   lambda hub, d: hub.set_volume(**d)),
     "set_activity": ({vol.Required("activity"): vol.In(ACTIVITIES), vol.Optional("force"): cv.boolean},
                      lambda hub, d: hub.activity.set(**d)),
     "channel": ({vol.Required("number"): vol.All(cv.string, vol.Match(r"^\d{1,4}\Z"))},
@@ -159,13 +162,15 @@ class PageStateView(HomeAssistantView):
 
 
 class ArtView(HomeAssistantView):
-    """Plex/Jellyfin artwork without exposing their tokens; images only."""
+    """Plex/Jellyfin artwork without exposing their tokens, and YouTube thumbnails; images only."""
 
     url, name, requires_auth = "/api/homehub_media/art/{server}/{key}", "api:homehub_media:art", True
 
     async def get(self, request: web.Request, server: str, key: str) -> web.Response:
-        lib = (hub := loaded_hub(request.app[KEY_HASS])) and hub.library
-        if not (srv := lib and lib.server(server)) or not ART_KEY_RE.fullmatch(key):
+        hass = request.app[KEY_HASS]
+        hub = loaded_hub(hass)
+        srv = hub and (YouTubeArt(hass) if server == "youtube" else hub.library and hub.library.server(server))
+        if not srv or not ART_KEY_RE.fullmatch(key):
             raise web.HTTPNotFound
         try:
             body, content_type = await srv.fetch_art(key)

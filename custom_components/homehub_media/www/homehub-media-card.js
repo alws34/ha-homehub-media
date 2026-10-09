@@ -34,8 +34,16 @@ const BRANDS = {
 };
 const COMP_DEFAULTS = {
   visual: null, visual_enabled: false, video_loop: true, video_random_start: true, original_volume: 20,
-  soundtrack: null, soundtrack_loop: true, soundtrack_random_start: true, soundtrack_volume: 100,
+  soundtrack: null, soundtrack_loop: true, soundtrack_random_start: true, soundtrack_volume: 100, visuals: [],
 };
+const VISUALS_MAX = 50;  // catalog.VISUALS_MAX
+// the mode's random-visual pool: adds or removes one id, keeps the order, never grows past the backend's cap
+const toggleIn = (list, id) => {
+  const l = Array.isArray(list) ? list : [];
+  if (l.includes(id)) return l.filter((x) => x !== id);
+  return l.length < VISUALS_MAX ? [...l, id] : l;
+};
+const randomLabel = (comp) => (comp?.visuals?.length >= 2 ? `Random from ${comp.visuals.length} videos` : "");
 const ARROWS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -380,6 +388,7 @@ class HomeHubMediaCard extends HTMLElement {
         <div class="pad" data-s="pad"></div>
         <div data-s="padhint"></div>
         <div class="ctl" data-s="ctl"></div>
+        <div class="volrow" data-s="vol"></div>
       </div>
       <div class="col">
         <div data-s="apps"></div>
@@ -455,6 +464,14 @@ class HomeHubMediaCard extends HTMLElement {
     this._sec("ctl", [!!s.tv?.muted, tp, canTouch], () => this._ctlHtml(!!s.tv?.muted, tp, canTouch));
     const vol = this.shadowRoot.querySelector("[data-vol]");
     if (vol) vol.textContent = s.tv?.volume ?? "–";
+    const level = s.tv?.volume;  // known only with the TV media player, which set_volume needs
+    this._sec("vol", [level != null], () => (level == null ? ""
+      : `${icon("mdi:volume-medium")}<input type="range" min="0" max="100" step="1" data-volume aria-label="TV volume">`));
+    const slider = this.shadowRoot.querySelector("[data-volume]");
+    if (slider && level != null && !this._volTimer && Date.now() - (this._volAt || 0) > 1500) {  // never fight a drag
+      slider.value = level;
+      slider.style.setProperty("--p", `${level}%`);
+    }
 
     const apps = (s.apps || []).filter((a) => a.installed);
     this._sec("apps", [apps, s.tv?.app], () => (apps.length ? `<h3 class="sh">Apps</h3><div class="apps">${apps.map((a) => {
@@ -653,7 +670,7 @@ class HomeHubMediaCard extends HTMLElement {
 
   _ambSlice() {
     const a = this._snap.ambience || {};
-    if (!this._edit) return ["grid", a.mode, a.modes, a.auto, a.daypart_mode];
+    if (!this._edit) return ["grid", a.mode, a.modes, a.auto, a.daypart_mode, (a.modes || []).map((m) => randomLabel(a.compositions?.[m.id]))];
     return ["edit", this._edit.id, this._edit.draft, this._browse, this._catVer, this._catalogErr,
       a.mode === this._edit.id, a.modes, this._refreshing];
   }
@@ -687,7 +704,7 @@ class HomeHubMediaCard extends HTMLElement {
       <div class="modes">
         ${tile(!!a.auto, "auto", null, "mdi:auto-fix", "Auto", dp ? dp.name : "Nothing scheduled")}
         ${modes.map((m) => tile(a.mode === m.id, "mode", m.id, m.icon || "mdi:lightbulb-group", m.name,
-          m.lights_only ? "Lights only" : "", !m.lights_only)).join("")}
+          m.lights_only ? "Lights only" : randomLabel(a.compositions?.[m.id]), !m.lights_only)).join("")}
       </div>`;
   }
 
@@ -779,10 +796,12 @@ class HomeHubMediaCard extends HTMLElement {
 
   async _start() {
     const ed = this._edit;
-    const draft = { ...ed.draft };
-    // unsaved edits are applied live on top of the saved mode; Save keeps them
-    if (await this._call("ambience_start", { mode: ed.id }) && JSON.stringify(draft) !== ed.saved) {
-      this._call("ambience_update", draft);
+    const saved = JSON.parse(ed.saved);
+    // unsaved edits are applied live on top of the saved mode (Save keeps them); only the changed keys, so an
+    // untouched visual does not replace the one the mode picked at random
+    const changed = Object.fromEntries(Object.entries(ed.draft).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(saved[k])));
+    if (await this._call("ambience_start", { mode: ed.id }) && Object.keys(changed).length) {
+      this._call("ambience_update", changed);
     }
   }
 
@@ -794,7 +813,8 @@ class HomeHubMediaCard extends HTMLElement {
     if (!item) return `<div class="car-empty">${icon("mdi:folder-open-outline")}No ${label.toLowerCase()}s yet. Add files and refresh.</div>`;
     const d = this._edit.draft;
     const sel = (kind === "visual" ? d.visual : d.soundtrack) === item.id;
-    const meta = [`${i + 1} / ${list.length}`, item.live ? "Live" : item.duration ? fmtTime(item.duration) : ""].filter(Boolean).join(" · ");
+    const meta = [`${i + 1} / ${list.length}`, item.source_type === "youtube" ? "YouTube" : item.live ? "Live" : item.duration ? fmtTime(item.duration) : ""].filter(Boolean).join(" · ");
+    const rot = kind === "visual" && (d.visuals || []).includes(item.id);
     const nav = (dir, ic, aria) => `<button class="nav ${dir}" data-a="browse" data-v="${kind}" data-d="${dir === "prev" ? -1 : 1}" aria-label="${aria} ${label.toLowerCase()}"${list.length < 2 ? " disabled" : ""}>${icon(ic)}</button>`;
     return `<div class="car ${kind}${sel ? " sel" : ""}" data-swipe="${kind}" tabindex="0" role="group" aria-roledescription="carousel"
         aria-label="${label}: ${esc(item.title)}, ${i + 1} of ${list.length}${sel ? ", selected" : ""}. Arrow keys browse, Enter selects">
@@ -804,6 +824,7 @@ class HomeHubMediaCard extends HTMLElement {
         <span class="cap"><b>${esc(item.title)}</b><small>${esc(meta)}</small></span>
         ${sel ? `<span class="check">${icon("mdi:check")}</span>` : ""}
       </button>
+      ${kind === "visual" ? `<button class="rot${rot ? " on" : ""}" data-a="rot" aria-pressed="${rot}" aria-label="Random rotation: ${esc(item.title)}">${icon("mdi:shuffle-variant")}</button>` : ""}
       <button class="fav${item.favorite ? " on" : ""}" data-a="fav" data-v="${kind}" aria-pressed="${!!item.favorite}" aria-label="Favourite ${esc(item.title)}">${icon(item.favorite ? "mdi:star" : "mdi:star-outline")}</button>
       ${nav("next", "mdi:chevron-right", "Next")}
     </div>`;
@@ -831,6 +852,7 @@ class HomeHubMediaCard extends HTMLElement {
           ${chip("tog", "video_loop", d.video_loop, "mdi:repeat", "Loop")}
           ${chip("tog", "video_random_start", d.video_random_start, "mdi:shuffle-variant", "Random start")}
         </div>
+        ${randomLabel(d) ? hint(`${randomLabel(d)} each time the mode starts`, "mdi:shuffle-variant") : ""}
       </section>
       <section class="edsec">
         <h3 class="sh">${icon("mdi:music-note-outline")}Soundtrack</h3>
@@ -840,6 +862,8 @@ class HomeHubMediaCard extends HTMLElement {
           ${chip("tog", "soundtrack_loop", d.soundtrack_loop, "mdi:repeat", "Loop")}
           ${chip("tog", "soundtrack_random_start", d.soundtrack_random_start, "mdi:shuffle-variant", "Random start")}
         </div>
+        ${d.visual_enabled && this._list("visual").find((x) => x.id === d.visual)?.source_type === "youtube"
+          ? hint("A YouTube video plays with its own sound, so the soundtrack and mix are not used") : ""}
       </section>
       <section class="edsec mix">
         <h3 class="sh">${icon("mdi:tune-vertical-variant")}Mix</h3>
@@ -918,6 +942,12 @@ class HomeHubMediaCard extends HTMLElement {
       case "browse": return this._browseBy(v, Number(b.dataset.d));
       case "pick": return this._pick(v);
       case "fav": return this._fav(v);
+      case "rot": {
+        const { item } = this._cur("visual");
+        if (!item) return undefined;
+        this._browse.visual = item.id;
+        return this._editSet({ visuals: toggleIn(ed.draft.visuals, item.id) });
+      }
       case "tog": return this._editSet({ [v]: !ed.draft[v] });
       case "vis": return this._editSet(ed.draft.visual_enabled ? { visual_enabled: false }
         : { visual_enabled: true, visual: ed.draft.visual ?? this._cur("visual").item?.id ?? null });
@@ -1058,6 +1088,17 @@ class HomeHubMediaCard extends HTMLElement {
 
   _onInput(e) {
     const t = e.composedPath()[0];
+    if (t.matches?.("[data-volume]")) {
+      const level = clamp(Math.round(Number(t.value) || 0), 0, 100);
+      t.style.setProperty("--p", `${level}%`);
+      this._volAt = Date.now();
+      clearTimeout(this._volTimer);
+      this._volTimer = setTimeout(() => {
+        this._volTimer = null;
+        this._call("set_volume", { level });
+      }, 250);
+      return;
+    }
     if (!t.matches?.("[data-mix]") || !this._edit) return;
     const v = clamp(Number(t.value) || 0, 0, 100);
     t.style.setProperty("--p", `${v}%`);
@@ -1296,8 +1337,9 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .cap small { font-size: 12px; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .check { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--hh-accent); color: var(--hh-on-accent); }
 .check ha-icon { --mdc-icon-size: 18px; }
-.nav, .fav { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; }
+.nav, .fav, .rot { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; }
 .fav.on ha-icon { color: var(--warning-color, #ffc107); }
+.rot.on ha-icon { color: var(--hh-accent); }
 /* visual: big 16:9 slide with glass controls on top */
 .car.visual { aspect-ratio: 16 / 9; max-height: 260px; }
 .car.visual .slide { position: absolute; inset: 0; }
@@ -1305,12 +1347,17 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .car.visual .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 32px 56px 12px 16px; color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, .7)); }
 .car.visual .cap small { opacity: .85; }
 .car.visual .check { position: absolute; top: 10px; left: 10px; }
-.car.visual .nav, .car.visual .fav { position: absolute; z-index: 1; color: #fff; }
-.car.visual .nav::before, .car.visual .fav::before { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: rgba(0, 0, 0, .38); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
-.car.visual .nav ha-icon, .car.visual .fav ha-icon { position: relative; }
+.car.visual .nav, .car.visual .fav, .car.visual .rot { position: absolute; z-index: 1; color: #fff; }
+.car.visual .nav::before, .car.visual .fav::before, .car.visual .rot::before { content: ""; position: absolute; inset: 6px; border-radius: 50%; background: rgba(0, 0, 0, .38); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.car.visual .nav ha-icon, .car.visual .fav ha-icon, .car.visual .rot ha-icon { position: relative; }
 .car.visual .nav { top: 50%; margin-top: -22px; }
 .car.visual .prev { left: 4px; } .car.visual .next { right: 4px; }
 .car.visual .fav { top: 4px; right: 4px; }
+.car.visual .rot { top: 4px; right: 48px; }
+.volrow { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
+.volrow:empty { display: none; }
+.volrow ha-icon { flex: none; color: var(--hh-fg2); }
+.volrow input { flex: 1; min-width: 0; }
 /* soundtrack: compact row */
 .car.soundtrack { display: flex; align-items: center; gap: 2px; padding: 8px 4px; }
 .car.soundtrack .slide { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 0 4px; }
@@ -1385,4 +1432,4 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === TAG)) {
   window.customCards.push({ type: TAG, name: "HomeHub Media", description: "Remote, ambience and library", preview: true });
 }
-if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek };
+if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel };

@@ -26,6 +26,7 @@ def make_hub(hass, options=OPTS):
     with patch.object(hub_mod, "SamsungTV", autospec=True):
         hub = Hub(hass, entry)
     hub.tv.available = hub.tv.keyboard_active = hub.tv.pointer_active = False
+    hub.tv.mac = None
     hub.pc_coord, hub.keyboard = AsyncMock(), AsyncMock()
     hub.activity = MagicMock(current="tv", set=AsyncMock())
     return hub
@@ -59,6 +60,48 @@ async def test_remote_routing(hass):
     hub.options["box"] = None
     with pytest.raises(ServiceValidationError):
         await hub.remote("up", "box")
+
+
+async def test_power_volume_and_mute_use_the_tv_entity(hass):
+    calls = {s: async_mock_service(hass, "media_player", s)
+             for s in ("turn_off", "volume_up", "volume_down", "volume_mute", "volume_set")}
+    hub = make_hub(hass, {**OPTS, "tv": {"entity": "media_player.tv"}})
+    hub.activity.power_on = AsyncMock()
+    hass.states.async_set("media_player.tv", "on", {"is_volume_muted": False})
+    await hub.remote("power")
+    assert calls["turn_off"][-1].data == {"entity_id": "media_player.tv"}
+    hass.states.async_set("media_player.tv", "off")
+    await hub.remote("power", "pc")  # the PC's screen is the TV
+    hub.activity.power_on.assert_awaited_once()  # turn_on if supported, else Wake-on-LAN
+    hass.states.async_set("media_player.tv", "on", {"is_volume_muted": False})
+    await hub.remote("volume_up", "box")  # volume always goes to the TV
+    await hub.remote("volume_down")
+    await hub.remote("mute")
+    assert [len(calls[s]) for s in ("volume_up", "volume_down")] == [1, 1]
+    assert calls["volume_mute"][-1].data == {"entity_id": "media_player.tv", "is_volume_muted": True}
+    hass.states.async_set("media_player.tv", "on", {"is_volume_muted": True})
+    await hub.remote("mute")
+    assert calls["volume_mute"][-1].data["is_volume_muted"] is False
+    await hub.set_volume(35)
+    assert calls["volume_set"][-1].data == {"entity_id": "media_player.tv", "volume_level": 0.35}
+    hub.tv.send_key.assert_not_awaited()
+
+
+async def test_power_without_entity_wakes_an_off_tv(hass):
+    hub = make_hub(hass)
+    with pytest.raises(ServiceValidationError, match="TV media player"):
+        await hub.set_volume(10)
+    await hub.remote("power")  # off, no MAC: the key, which reports the TV unreachable
+    hub.tv.send_key.assert_awaited_with("KEY_POWER")
+    hub.tv.send_key.reset_mock()
+    hub.tv.mac = "aa:bb:cc:dd:ee:ff"
+    await hub.remote("power")
+    hub.tv.wake.assert_awaited_once()
+    hub.tv.send_key.assert_not_awaited()
+    hub.tv.available = True
+    await hub.remote("power")
+    await hub.remote("mute")
+    assert [c.args[0] for c in hub.tv.send_key.await_args_list] == ["KEY_POWER", "KEY_MUTE"]
 
 
 async def test_send_text_routing(hass):
