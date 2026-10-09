@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HomeHub Ambience</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  [hidden] { display: none !important; }
+  #v { position: fixed; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+  #hint { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); padding: .5em 1em;
+          border-radius: .4em; background: rgba(0, 0, 0, .6); color: #fff; font: 28px sans-serif; }
+</style>
+</head>
+<body>
+<video id="v" playsinline></video>
+<audio id="a"></audio>
+<div id="hint" hidden>Press OK for sound</div>
+<script>
+(function () {
+  "use strict";
+  // No secrets here: the page is served unauthenticated; all access comes from the signed `s` URL.
+  var V = document.getElementById("v"), A = document.getElementById("a"), hint = document.getElementById("hint");
+  var noop = function () {};
+
+  function sameOrigin(u) {
+    try {
+      var x = new URL(u, location.href);
+      return /^https?:$/.test(x.protocol) && x.origin === location.origin;
+    } catch (e) { return false; }
+  }
+  function clampVolume(v) { v = Number(v); return v >= 0 ? (v > 1 ? 1 : v) : 0; } // NaN -> 0
+  // Same-origin only; the single exception is an https radio stream on the soundtrack layer.
+  function layerOk(d, kind) {
+    if (!d || typeof d.url !== "string") return false;
+    if (sameOrigin(d.url)) return true;
+    if (kind !== "soundtrack" || d.stream !== true) return false;
+    try { return new URL(d.url).protocol === "https:"; } catch (e) { return false; } // absolute https only
+  }
+  // Identity of a media URL: signed URLs are re-minted per poll, so ignore the signature.
+  function keyOf(url) { var x = new URL(url, location.href); x.searchParams.delete("authSig"); return x.href; }
+
+  function play(el) {
+    var p = el.play();
+    if (!p || !p.catch) return;
+    p.catch(function (e) {
+      if (!e || e.name !== "NotAllowedError") return; // AbortError etc. = a newer load superseded this play()
+      el.muted = true; hint.hidden = false;           // unmuted autoplay blocked: play muted until a key press
+      var q = el.play(); if (q && q.catch) q.catch(noop);
+    });
+  }
+  function unlock() {
+    if (hint.hidden) return;
+    hint.hidden = true; V.muted = A.muted = false;
+    if (lv.key) play(V);
+    if (la.key) play(A);
+  }
+  document.addEventListener("keydown", unlock);
+  document.addEventListener("click", unlock);
+
+  function mk(el) {
+    var l = { el: el, key: null, seek: false, stream: false };
+    el.addEventListener("loadedmetadata", function () { // random start: once per URL
+      if (!l.seek) return;
+      l.seek = false;
+      if (isFinite(el.duration)) el.currentTime = Math.random() * Math.max(0, el.duration - 0.5);
+    });
+    // Retry after 5 s by forgetting the layer and the version: the next poll re-applies the state with
+    // freshly signed URLs (reloading the old signed URL would 401 forever once its signature expires).
+    function retry() {
+      setTimeout(function () { if (l.key && (el.error || el.ended)) { l.key = null; ver = null; } }, 5000);
+    }
+    el.addEventListener("error", retry);
+    el.addEventListener("ended", function () { if (l.stream) retry(); }); // radio server closed the connection
+    return l;
+  }
+  var lv = mk(V), la = mk(A), fade = null, ver = null, fails = 0;
+
+  function clear(l) {
+    if (l.key === null) return;
+    l.key = null; l.seek = false;
+    l.el.pause(); l.el.removeAttribute("src"); l.el.load();
+  }
+  function setLayer(l, d, kind) {
+    if (!layerOk(d, kind)) return clear(l);
+    var url = new URL(d.url, location.href).href, k = keyOf(url);
+    l.el.loop = !!d.loop;
+    l.stream = d.stream === true;
+    if (!fade) l.el.volume = clampVolume(d.volume);
+    if (l.key !== k) { l.key = k; l.seek = !!d.random_start; l.el.src = url; play(l.el); }
+  }
+  function startFade(secs) {
+    if (fade) return;
+    var f = fade = { t0: Date.now(), ms: secs * 1000, v: V.volume, a: A.volume };
+    (function step() {
+      if (fade !== f) return;
+      var k = Math.min(1, (Date.now() - f.t0) / f.ms);
+      V.volume = f.v * (1 - k); A.volume = f.a * (1 - k);
+      if (k < 1) requestAnimationFrame(step);
+    })();
+  }
+  function apply(st) {
+    if (st.stop) {
+      fade = null; clear(lv); clear(la);
+      V.muted = A.muted = false; hint.hidden = true;
+      return;
+    }
+    if (st.fade_secs > 0) startFade(st.fade_secs); else fade = null;
+    setLayer(lv, st.visual, "visual");
+    setLayer(la, st.soundtrack, "soundtrack");
+  }
+
+  var next = new URLSearchParams(location.search).get("s");
+  function tick() {
+    var ac = new AbortController(), to = setTimeout(function () { ac.abort(); }, 10000); // a hung request must not stall polling
+    fetch(next, { cache: "no-store", redirect: "error", signal: ac.signal })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (st) {
+        fails = 0;
+        if (!st || typeof st.version !== "number") return;
+        if (typeof st.next === "string" && sameOrigin(st.next)) next = st.next;
+        if (st.version !== ver) { ver = st.version; apply(st); }
+      })
+      .catch(function () { fails++; }) // keep playing; back off 2 s, 4 s, 8 s, then 10 s
+      .then(function () { clearTimeout(to); setTimeout(tick, fails ? Math.min(10000, 1000 * Math.pow(2, fails)) : 1000); });
+  }
+  if (next && sameOrigin(next)) tick();
+
+  if (window.__HOMEHUB_TEST__) window.__ambienceTest = { sameOrigin: sameOrigin, clampVolume: clampVolume, layerOk: layerOk, apply: apply };
+})();
+</script>
+</body>
+</html>
