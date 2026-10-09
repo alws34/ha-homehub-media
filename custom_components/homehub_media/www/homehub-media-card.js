@@ -20,7 +20,7 @@ const TARGETS = {
 };
 // app tile [background, text]: brand colours, contrast-checked against the text colour
 const BRANDS = {
-  netflix: ["#000", "#e50914"],
+  netflix: ["#000", "#f5141f"],  // a touch lighter than brand red for 5:1 contrast
   youtube: ["#e62117", "#fff"],
   prime_video: ["#0f171e", "#00a8e1"],
   disney_plus: ["linear-gradient(135deg,#0b1647,#1a3a9e)", "#fff"],
@@ -74,6 +74,7 @@ const fmtTime = (sec) => {
 };
 const fmtMins = (m) => (m >= 60 ? `${Math.floor(m / 60)} h ${pad2(m % 60)} min` : `${m} min`);
 const hint = (text, ic = "mdi:information-outline") => `<p class="hint">${icon(ic)}<span>${esc(text)}</span></p>`;
+const banner = (text, ic = "mdi:alert-circle-outline", cls = "banner err") => `<div class="${cls}">${icon(ic)}<span>${esc(text)}</span></div>`;
 
 class HomeHubMediaCard extends HTMLElement {
   constructor() {
@@ -109,8 +110,9 @@ class HomeHubMediaCard extends HTMLElement {
   }
 
   static getStubConfig() { return {}; }
-  getGridOptions() { return { columns: 12, min_columns: 6, rows: "auto" }; }
-  getCardSize() { return 8; }
+  // drawer: the host is position:fixed, so an "auto" row collapses to nothing ("rows: 0" would emit invalid `span 0`)
+  getGridOptions() { return this._config?.drawer ? { columns: 12, rows: "auto" } : { columns: 12, min_columns: 6, rows: "auto" }; }
+  getCardSize() { return this._config?.drawer ? 0 : 8; }
 
   setConfig(config) {
     const tabs = config?.tabs ?? Object.keys(TABS);
@@ -137,6 +139,7 @@ class HomeHubMediaCard extends HTMLElement {
   get hass() { return this._hass; }
 
   connectedCallback() {
+    this._retryAt = 0;  // re-adding the card retries a failed subscribe right away
     this._subscribe();
     this._render();
     clearInterval(this._ticker);
@@ -146,6 +149,12 @@ class HomeHubMediaCard extends HTMLElement {
   disconnectedCallback() {
     clearInterval(this._ticker);
     clearTimeout(this._chTimer);
+    clearTimeout(this._mvTimer);
+    clearTimeout(this._scTimer);
+    this._mvTimer = this._scTimer = this._swipe = null;
+    this._mv = { dx: 0, dy: 0 };
+    this._sc = 0;
+    this._pointers.clear();
     this._stopHold();
     if (this._edit) this._flushLive(this._edit);
     this._unsubscribe();
@@ -154,13 +163,15 @@ class HomeHubMediaCard extends HTMLElement {
   // ---------- data ----------
 
   async _subscribe() {
-    if (this._sub || !this._hass?.connection || !this.isConnected) return;
+    // hass is set on every HA state change: after a failure wait 30 s instead of retrying each time
+    if (this._sub || !this._hass?.connection || !this.isConnected || Date.now() < (this._retryAt || 0)) return;
     const sub = this._hass.connection.subscribeMessage((e) => this._onSnapshot(e), { type: `${DOMAIN}/subscribe` });
     this._sub = sub;  // the pending promise; _unsubscribe() resolves it, even mid-subscribe
     try {
       await sub;
     } catch (err) {
       if (this._sub === sub) this._sub = null;
+      this._retryAt = Date.now() + 30000;
       this._fatal = err?.code === "unknown_command"
         ? "HomeHub Media is not set up. Add the integration first."
         : `HomeHub Media is unavailable (${err?.message || "connection error"}).`;
@@ -184,28 +195,19 @@ class HomeHubMediaCard extends HTMLElement {
   }
 
   _loadFor(tab) {
-    if (tab === "ambience") this._loadCatalog();
-    if (tab === "library") this._loadLibrary();
+    if (tab === "ambience") this._load("catalog");
+    if (tab === "library") this._load("library");
   }
 
-  async _loadCatalog() {
+  // kind "catalog" -> this._catalog / this._catalogErr, "library" -> this._library / this._libraryErr
+  async _load(kind) {
     if (!this._hass) return;
     try {
-      this._catalog = await this._hass.callWS({ type: `${DOMAIN}/catalog` });
-      this._catErr = null;
+      this[`_${kind}`] = await this._hass.callWS({ type: `${DOMAIN}/${kind}` });
+      this[`_${kind}Err`] = null;
+      this._catVer = (this._catVer || 0) + 1;  // cheap identity for the editor slice
     } catch (err) {
-      this._catErr = err?.message || "Could not load media";
-    }
-    this._render();
-  }
-
-  async _loadLibrary() {
-    if (!this._hass) return;
-    try {
-      this._library = await this._hass.callWS({ type: `${DOMAIN}/library` });
-      this._libErr = null;
-    } catch (err) {
-      this._libErr = err?.message || "Could not load the library";
+      this[`_${kind}Err`] = err?.message || `Could not load the ${kind}`;
     }
     this._render();
   }
@@ -301,7 +303,7 @@ class HomeHubMediaCard extends HTMLElement {
         <div data-s="banner"></div>
         <div data-s="np"></div>
         <div class="tabs" role="tablist" aria-label="HomeHub Media" data-s="tabs"></div>
-        <div class="body" data-s="body"></div>
+        <div class="body" id="panel" data-s="body"></div>
       </div>`;
     const open = !!this._open;
     this.shadowRoot.innerHTML = `<style>${CSS}</style>${this._config.drawer
@@ -323,16 +325,24 @@ class HomeHubMediaCard extends HTMLElement {
     if (this._edit && !s?.ambience?.modes?.some((m) => m.id === this._edit.id)) this._closeEditor(false);
 
     this._sec("banner", [this._fatal, s?.tv?.available], () => {
-      if (this._fatal) return `<div class="banner err">${icon("mdi:alert-circle-outline")}<span>${esc(this._fatal)}</span></div>`;
-      if (s && s.tv?.available === false) return `<div class="banner">${icon("mdi:television-off")}<span>TV is off or unreachable</span></div>`;
+      if (this._fatal) return banner(this._fatal);
+      if (s && s.tv?.available === false) return banner("TV is off or unreachable", "mdi:television-off", "banner");
       return "";
     });
     this._sec("np", (s?.now_playing ?? []).slice(0, 1).map(({ position, ...rest }) => rest), () => this._npHtml());
     this._tickNp();
     this._sec("tabs", [tabs.length > 1 && tabs, this._tab], () => (tabs.length < 2 ? "" : tabs.map((t) => {
       const on = t === this._tab;
-      return `<button class="tab" role="tab" data-a="tab" data-v="${t}" aria-selected="${on}" tabindex="${on ? 0 : -1}">${icon(TABS[t][1])}<span>${TABS[t][0]}</span></button>`;
+      return `<button class="tab" role="tab" id="tab-${t}" aria-controls="panel" data-a="tab" data-v="${t}" aria-selected="${on}" tabindex="${on ? 0 : -1}">${icon(TABS[t][1])}<span>${TABS[t][0]}</span></button>`;
     }).join("")));
+    const body = this.shadowRoot.querySelector(".body");
+    if (tabs.length > 1) {
+      body.setAttribute("role", "tabpanel");
+      body.setAttribute("aria-labelledby", `tab-${this._tab}`);
+    } else {
+      body.removeAttribute("role");
+      body.removeAttribute("aria-labelledby");
+    }
     if (this._sec("body", [this._tab, !!s, !!this._fatal], () => this._bodyHtml())) {
       for (const k of Object.keys(this._slices)) if (!["banner", "np", "tabs", "body"].includes(k)) delete this._slices[k];
     }
@@ -379,7 +389,7 @@ class HomeHubMediaCard extends HTMLElement {
     if (!n) return "";
     const playing = n.state === "playing";
     const sub = [n.subtitle, n.player].filter(Boolean).join(" · ");
-    // these keys work in any TV app, so the strip always targets the TV
+    // no target: the hub routes these by the current activity
     return `<div class="np">
       ${img(n.image, "npbg")}
       <div class="npart">${icon("mdi:movie-open-outline")}${img(n.image)}</div>
@@ -389,9 +399,9 @@ class HomeHubMediaCard extends HTMLElement {
         <div class="nptime"><span data-npt></span><span>${n.duration ? fmtTime(n.duration) : ""}</span></div>
       </div>
       <div class="npbtns">
-        <button class="ib flat" data-a="remote" data-v="rewind" data-t="tv" aria-label="Back 30 seconds">${icon("mdi:rewind-30")}</button>
-        <button class="ib accent" data-a="remote" data-v="${playing ? "pause" : "play"}" data-t="tv" aria-label="${playing ? "Pause" : "Play"}">${icon(playing ? "mdi:pause" : "mdi:play")}</button>
-        <button class="ib flat" data-a="remote" data-v="fast_forward" data-t="tv" aria-label="Forward 30 seconds">${icon("mdi:fast-forward-30")}</button>
+        <button class="ib flat" data-a="np" data-v="rewind" aria-label="Back 30 seconds">${icon("mdi:rewind-30")}</button>
+        <button class="ib accent" data-a="np" data-v="${playing ? "pause" : "play"}" aria-label="${playing ? "Pause" : "Play"}">${icon(playing ? "mdi:pause" : "mdi:play")}</button>
+        <button class="ib flat" data-a="np" data-v="fast_forward" aria-label="Forward 30 seconds">${icon("mdi:fast-forward-30")}</button>
       </div>
     </div>`;
   }
@@ -421,7 +431,7 @@ class HomeHubMediaCard extends HTMLElement {
     const avail = ["tv", ...["box", "pc"].filter((k) => tg[k])];
     this._sec("targets", [avail, t], () => (avail.length < 2 ? "" : avail.map((k) => {
       const [label, aria, ic] = TARGETS[k];
-      return `<button class="pill" role="radio" aria-checked="${k === t}" aria-label="${aria}" data-a="target" data-v="${k}">${icon(ic)}<span>${label}</span></button>`;
+      return `<button class="pill" role="radio" aria-checked="${k === t}" tabindex="${k === t ? 0 : -1}" aria-label="${aria}" data-a="target" data-v="${k}">${icon(ic)}<span>${label}</span></button>`;
     }).join("")));
 
     const canTouch = t !== "box";
@@ -535,6 +545,7 @@ class HomeHubMediaCard extends HTMLElement {
 
   _tpDown(e, el) {
     e.preventDefault();
+    if (e.isPrimary) this._pointers.clear();  // drop fingers whose pointerup we never saw
     el.setPointerCapture?.(e.pointerId);
     this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this._pointers.size === 1) this._tap = { t: performance.now(), dist: 0 };
@@ -630,13 +641,13 @@ class HomeHubMediaCard extends HTMLElement {
   _ambSlice() {
     const a = this._snap.ambience || {};
     if (!this._edit) return ["grid", a.mode, a.modes, a.auto, a.daypart_mode];
-    return ["edit", this._edit.id, this._edit.draft, this._browse, this._catalog, this._catErr,
+    return ["edit", this._edit.id, this._edit.draft, this._browse, this._catVer, this._catalogErr,
       a.mode === this._edit.id, a.modes, this._refreshing];
   }
 
   _renderAmbience() {
     const a = this._snap.ambience || {};
-    this._sec("amberr", [a.error], () => (a.error ? `<div class="banner err">${icon("mdi:alert-circle-outline")}<span>${esc(a.error)}</span></div>` : ""));
+    this._sec("amberr", [a.error], () => (a.error ? banner(a.error) : ""));
     this._sec("ambmain", this._ambSlice(), () => (this._edit ? this._editorHtml() : this._modesHtml()));
     const until = a.sleep_until ? new Date(typeof a.sleep_until === "number" ? a.sleep_until * 1000 : a.sleep_until).getTime() : null;
     const mins = until ? Math.max(0, Math.ceil((until - Date.now()) / 60000)) : null;
@@ -673,7 +684,7 @@ class HomeHubMediaCard extends HTMLElement {
     if (!("visual_enabled" in saved)) draft.visual_enabled = draft.visual != null;
     this._edit = { id, draft, saved: JSON.stringify(draft), pending: null };
     this._browse = { visual: draft.visual, soundtrack: draft.soundtrack };
-    if (!this._catalog) this._loadCatalog();
+    if (!this._catalog) this._load("catalog");
     this._render();
     this.shadowRoot.querySelector("[data-a=edclose]")?.focus();
   }
@@ -731,18 +742,15 @@ class HomeHubMediaCard extends HTMLElement {
     const { item } = this._cur(kind);
     if (!item) return;
     this._browse[kind] = item.id;
-    item.favorite = !item.favorite;
-    this._render();
-    if (!(await this._call("set_favorite", { kind, media_id: item.id, favorite: item.favorite }))) {
-      item.favorite = !item.favorite;
-      this._render();
-    }
+    const flip = () => { item.favorite = !item.favorite; this._catVer++; this._render(); };
+    flip();
+    if (!(await this._call("set_favorite", { kind, media_id: item.id, favorite: item.favorite }))) flip();
   }
 
   async _refreshCatalog() {
     this._refreshing = true;
     this._render();
-    if (await this._call("refresh_catalog")) await this._loadCatalog();
+    if (await this._call("refresh_catalog")) await this._load("catalog");
     this._refreshing = false;
     this._render();
   }
@@ -767,7 +775,7 @@ class HomeHubMediaCard extends HTMLElement {
 
   _carouselHtml(kind) {
     const label = kind === "visual" ? "Visual" : "Soundtrack";
-    if (this._catErr && !this._catalog) return `<div class="car-empty">${icon("mdi:alert-circle-outline")}${esc(this._catErr)}</div>`;
+    if (this._catalogErr && !this._catalog) return `<div class="car-empty">${icon("mdi:alert-circle-outline")}${esc(this._catalogErr)}</div>`;
     if (!this._catalog) return `<div class="skel ${kind}"></div>`;
     const { list, i, item } = this._cur(kind);
     if (!item) return `<div class="car-empty">${icon("mdi:folder-open-outline")}No ${label.toLowerCase()}s yet. Add files and refresh.</div>`;
@@ -837,8 +845,8 @@ class HomeHubMediaCard extends HTMLElement {
   // ---------- library tab ----------
 
   _renderLibrary() {
-    this._sec("lib", [this._library, this._libErr, this._snap.servers], () => {
-      if (this._libErr && !this._library) return `<div class="banner err">${icon("mdi:alert-circle-outline")}<span>${esc(this._libErr)}</span></div>`;
+    this._sec("lib", [this._library, this._libraryErr, this._snap.servers], () => {
+      if (this._libraryErr && !this._library) return banner(this._libraryErr);
       if (!this._library) return `<div class="skel shelf-skel"></div><div class="skel shelf-skel"></div>`;
       const out = (this._snap.servers || []).map((srv) => {
         const d = this._library[srv];
@@ -874,7 +882,8 @@ class HomeHubMediaCard extends HTMLElement {
     switch (b.dataset.a) {
       case "tab": return this._setTab(v);
       case "target": return this._setTarget(v);
-      case "remote": return this._remote(v, b.dataset.t);
+      case "remote": return this._remote(v);
+      case "np": return this._call("remote", { command: v });
       case "touchpad": this._touchpad = !this._touchpad; return this._render();
       case "click": return this._click(v);
       case "app": return this._call("launch_app", { app: v });
@@ -1000,11 +1009,18 @@ class HomeHubMediaCard extends HTMLElement {
       this.shadowRoot.querySelector(".handle")?.focus();
       return;
     }
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
     if (t.getAttribute?.("role") === "tab" && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
       const tabs = this._tabs();
       e.preventDefault();
-      this._setTab(tabs[(tabs.indexOf(this._tab) + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length]);
+      this._setTab(tabs[(tabs.indexOf(this._tab) + step + tabs.length) % tabs.length]);
       this.shadowRoot.querySelector("[role=tab][aria-selected=true]")?.focus();
+      return;
+    }
+    if (step && t.getAttribute?.("role") === "radio") {  // target pills: roving radiogroup
+      e.preventDefault();
+      this._setTarget(nextTarget(this._eff(), this._snap?.targets, step));
+      this.shadowRoot.querySelector("[role=radio][aria-checked=true]")?.focus();
       return;
     }
     if (t.classList?.contains("dpad")) {
@@ -1058,9 +1074,6 @@ const CSS = `
   display: block;
   color: var(--hh-fg);
   -webkit-tap-highlight-color: transparent;
-}
-@supports not (color: color-mix(in srgb, red, blue)) {
-  :host { --hh-s1: rgba(128, 128, 128, .1); --hh-s2: rgba(128, 128, 128, .16); --hh-s3: rgba(128, 128, 128, .26); }
 }
 *, *::before, *::after { box-sizing: border-box; }
 [hidden], [data-s]:empty { display: none !important; }
@@ -1271,7 +1284,7 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .check { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--hh-accent); color: var(--hh-on-accent); }
 .check ha-icon { --mdc-icon-size: 18px; }
 .nav, .fav { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; }
-.fav.on ha-icon { color: #ffc107; }
+.fav.on ha-icon { color: var(--warning-color, #ffc107); }
 /* visual: big 16:9 slide with glass controls on top */
 .car.visual { aspect-ratio: 16 / 9; max-height: 260px; }
 .car.visual .slide { position: absolute; inset: 0; }
@@ -1293,7 +1306,6 @@ h3.sh ha-icon { --mdc-icon-size: 18px; }
 .car.soundtrack .cap { flex: 1; min-width: 0; }
 .car.soundtrack .cap small { color: var(--hh-fg2); }
 .car.soundtrack .nav, .car.soundtrack .fav { flex: none; color: var(--hh-fg2); }
-.car.soundtrack .fav.on ha-icon { color: #f2a900; }
 .car-empty { display: flex; align-items: center; gap: 10px; padding: 18px 16px; border-radius: 16px; background: var(--hh-s1); color: var(--hh-fg2); font-size: 13.5px; }
 input[type=range] {
   --p: 50%; -webkit-appearance: none; appearance: none; width: 100%; height: 44px; margin: 0; background: transparent; cursor: pointer;
