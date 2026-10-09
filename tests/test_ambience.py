@@ -137,6 +137,7 @@ async def test_sleep_timer_fades_then_stops(hass):
     am = await manager(hass, chill())
     await am.start("chill")
     await am.set_sleep_timer(2)
+    am._hub.last_command = 0
     assert am.sleep_until is not None and am.sleep_until > dt_util.utcnow() + timedelta(seconds=100)
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
@@ -145,6 +146,7 @@ async def test_sleep_timer_fades_then_stops(hass):
     await hass.async_block_till_done()
     assert am.mode == "off" and am.sleep_until is None
     am._hub.tv.send_key.assert_awaited_with("KEY_HOME")
+    assert am._hub.last_command > 0  # the stop counts as activity: idle auto ambience must not restart it
 
 
 async def test_sleep_timer_needs_a_running_mode(hass):

@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from custom_components.homehub_media import hub as hub_mod
@@ -92,6 +92,7 @@ async def test_send_text_routing(hass):
 async def test_launch_app_routes(hass):
     hub = make_hub(hass)
     hub.activity.current = "off"
+    hub.activity.set.side_effect = lambda activity: setattr(hub.activity, "current", activity)
     await hub.launch_app("jellyfin")  # not installed, server configured: its web UI in the TV browser
     hub.activity.set.assert_awaited_with("tv")
     hub.tv.open_url.assert_awaited_with("http://192.0.2.7:8096")
@@ -99,12 +100,35 @@ async def test_launch_app_routes(hass):
     hub.apps = {"youtube": "111299001912"}
     await hub.launch_app("youtube")
     hub.tv.launch.assert_awaited_with("111299001912")
-    await hub.launch_app("3201907018807")  # raw Tizen id
+    await hub.launch_app("3201907018807")  # raw Tizen id of a catalog app: reported by its key
     hub.tv.launch.assert_awaited_with("3201907018807")
+    assert hub.snapshot()["tv"]["app"] == "netflix"
+    await hub.launch_app("org.example.app")  # unknown raw id: reported as is
+    assert hub.snapshot()["tv"]["app"] == "org.example.app"
     with pytest.raises(ServiceValidationError):
-        await hub.launch_app("netflix")  # catalog app, not installed, no server
+        await hub.launch_app("max")  # catalog app, not installed, no server
     apps = {a["key"]: a["installed"] for a in hub.snapshot()["apps"]}
-    assert apps["youtube"] and apps["jellyfin"] and not apps["netflix"]
+    assert apps["youtube"] and apps["jellyfin"] and not apps["max"]
+    hub.activity.current = "pc"
+    hub.async_notify()  # left the TV: no TV app any more
+    assert hub.current_app is None
+
+
+async def test_launch_app_stops_media_ambience_on_tv(hass):
+    hub = make_hub(hass)
+    hub.apps = {"youtube": "111299001912"}
+    hub.ambience = MagicMock(uses_media=True, mode="chill", stop=AsyncMock())
+    await hub.launch_app("youtube")  # already on tv: activity.set is skipped, so the hub stops the page itself
+    hub.ambience.stop.assert_awaited_once()
+    hub.activity.set.assert_not_awaited()
+
+
+async def test_app_entity_state_maps_to_catalog_key(hass):
+    hub = make_hub(hass, {"tv": {"app_entity": "sensor.tv_app"}})
+    hub.ambience = MagicMock(snapshot=dict)
+    for state, key in (("Netflix", "netflix"), ("111299001912", "youtube"), ("Some Game", "Some Game")):
+        hass.states.async_set("sensor.tv_app", state)
+        assert hub.snapshot()["tv"]["app"] == key
 
 
 async def test_play_library_item_retries_until_the_app_is_ready(hass):
@@ -115,8 +139,12 @@ async def test_play_library_item_retries_until_the_app_is_ready(hass):
         await hub.play_library_item("jellyfin", "abc")
     hub.tv.open_url.assert_awaited_with("http://192.0.2.7:8096")
     assert srv.play.await_count == 3 and sleep.await_count == 2
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError, match="Plex is not configured"):
         await hub.play_library_item("plex", "abc")
+    srv.play = AsyncMock(return_value=False)
+    with (patch.object(hub_mod.asyncio, "sleep", AsyncMock()), patch.object(hub_mod, "PLAY_TIMEOUT", 0),
+          pytest.raises(HomeAssistantError, match="Jellyfin did not start playing")):
+        await hub.play_library_item("jellyfin", "abc")
 
 
 async def test_pc_open_stops_media_ambience_first(hass):
@@ -142,13 +170,23 @@ async def test_start_discovers_and_persists_apps(hass, setup_entry):
     assert setup_entry.options["ambience"] == {"backend": "tv", "radio": {}}
 
 
-async def test_tv_unreachable_does_not_fail_setup(hass):
+async def test_empty_discovery_is_not_persisted(hass):
+    hub = make_hub(hass, {})
+    hub.tv.discover_apps.return_value = {}
+    with pytest.raises(HomeAssistantError):
+        await hub.rescan_apps()
+    assert "apps" not in hub.entry.options
+
+
+@pytest.mark.parametrize("unreachable", [True, False])  # False: standby, REST answers but the TV is off
+async def test_tv_off_does_not_fail_setup_or_discover(hass, unreachable):
     entry = MockConfigEntry(domain=DOMAIN, data=DATA)
     entry.add_to_hass(hass)
     with patch.object(hub_mod, "SamsungTV", autospec=True) as tv_cls:
         tv = tv_cls.return_value
         tv.token, tv.available, tv.keyboard_active, tv.pointer_active = "t", False, False, False
-        tv.device_info.side_effect = CannotConnect("off")
+        if unreachable:
+            tv.device_info.side_effect = CannotConnect("off")
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done(wait_background_tasks=True)
         assert entry.state is ConfigEntryState.LOADED and "apps" not in entry.options

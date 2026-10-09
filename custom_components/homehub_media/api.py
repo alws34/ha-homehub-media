@@ -17,12 +17,12 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .ambience import STATE_PATH
-from .catalog import ID_RE
 from .const import ACTIVITIES, COMMANDS, DOMAIN, SIGNAL_UPDATE, TARGETS, TEXT_MAX
 from .hub import Hub, sign
 
 ART_KEY_RE = re.compile(r"[A-Za-z0-9_=-]{1,512}")
 ART_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}  # never SVG/HTML from HA's origin
+ART_MAX = 5 * 1024 * 1024
 SIGNED = ("/media/", "/api/homehub_media/art/")  # /local/... is public
 
 
@@ -39,7 +39,7 @@ def _hub(hass: HomeAssistant) -> Hub:
 
 def _signed(hass: HomeAssistant, connection: websocket_api.ActiveConnection, path: str | None) -> str | None:
     if path and path.startswith(SIGNED):
-        return sign(hass, path, refresh_token_id=connection.refresh_token_id)
+        return sign(hass, path, connection.refresh_token_id)
     return path
 
 
@@ -94,7 +94,7 @@ def _text(value: Any) -> str:
     return text
 
 
-_APP = vol.Match(r"^[A-Za-z0-9._-]{1,64}$")
+_APP = vol.Match(r"^[A-Za-z0-9._-]{1,64}\Z")
 _TYPE_TARGET = vol.In(("tv", "pc", "keyboard"))
 _DELTA = vol.All(vol.Coerce(float), vol.Range(-500, 500))
 _PCT = vol.All(vol.Coerce(float), vol.Range(0, 100))  # catalog.validate_composition rounds to int
@@ -108,7 +108,7 @@ COMPOSITION = {  # types only; the ambience manager validates ids and the merged
 SERVICES: dict[str, tuple[dict, Any]] = {
     "remote": ({vol.Required("command"): vol.In(COMMANDS), vol.Optional("target"): vol.In(TARGETS)},
                lambda hub, d: hub.remote(**d)),
-    "send_key": ({vol.Required("key"): vol.Match(r"^KEY_[A-Z0-9_]{1,32}$"),
+    "send_key": ({vol.Required("key"): vol.Match(r"^KEY_[A-Z0-9_]{1,32}\Z"),
                   vol.Optional("hold_secs"): vol.All(vol.Coerce(float), vol.Range(0, 5))},
                  lambda hub, d: hub.send_key(**d)),
     "launch_app": ({vol.Required("app"): _APP}, lambda hub, d: hub.launch_app(**d)),
@@ -122,14 +122,15 @@ SERVICES: dict[str, tuple[dict, Any]] = {
                 lambda hub, d: hub.pointer(**d)),
     "set_activity": ({vol.Required("activity"): vol.In(ACTIVITIES), vol.Optional("force"): cv.boolean},
                      lambda hub, d: hub.activity.set(**d)),
-    "channel": ({vol.Required("number"): vol.All(cv.string, vol.Match(r"^\d{1,4}$"))},
+    "channel": ({vol.Required("number"): vol.All(cv.string, vol.Match(r"^\d{1,4}\Z"))},
                 lambda hub, d: hub.channel(**d)),
     "ambience_start": ({vol.Required("mode"): cv.slug}, lambda hub, d: hub.ambience.start(d["mode"])),
     "ambience_stop": ({}, lambda hub, d: hub.ambience.stop()),
     "ambience_update": (COMPOSITION, lambda hub, d: hub.ambience.update(dict(d))),
     "save_mode": ({vol.Required("mode"): cv.slug, **COMPOSITION},
                   lambda hub, d: hub.ambience.save_mode(d["mode"], {k: v for k, v in d.items() if k != "mode"})),
-    "set_favorite": ({vol.Required("kind"): vol.In(("visual", "soundtrack")), vol.Required("media_id"): vol.Match(ID_RE),
+    "set_favorite": ({vol.Required("kind"): vol.In(("visual", "soundtrack")),
+                      vol.Required("media_id"): vol.Match(r"^[a-z0-9][a-z0-9_-]{0,63}\Z"),  # catalog.ID_RE
                       vol.Required("favorite"): cv.boolean}, lambda hub, d: hub.ambience.set_favorite(**d)),
     "ambience_auto": ({}, lambda hub, d: hub.ambience.auto_start()),
     "ambience_sleep_timer": ({vol.Required("minutes"): vol.All(vol.Coerce(int), vol.Range(0, 600))},
@@ -137,7 +138,7 @@ SERVICES: dict[str, tuple[dict, Any]] = {
     "refresh_catalog": ({}, lambda hub, d: hub.ambience.refresh_catalog()),
     "rescan_apps": ({}, lambda hub, d: hub.rescan_apps()),
     "play_library_item": ({vol.Required("server"): vol.In(("plex", "jellyfin")),
-                           vol.Required("item_id"): vol.Match(r"^[A-Za-z0-9-]{1,64}$")},
+                           vol.Required("item_id"): vol.Match(r"^[A-Za-z0-9-]{1,64}\Z")},
                           lambda hub, d: hub.play_library_item(**d)),
     "pc_open": ({vol.Required("client"): cv.slug}, lambda hub, d: hub.pc_open(**d)),
     "pc_close": ({}, lambda hub, d: hub.pc_close()),
@@ -179,7 +180,8 @@ class ArtView(HomeAssistantView):
             raise web.HTTPNotFound from None
         except HomeAssistantError:
             raise web.HTTPBadGateway from None
-        if content_type not in ART_TYPES:
+        # ponytail: library._req has already read the body; a streamed read with a limit there would also cap memory
+        if content_type not in ART_TYPES or len(body) > ART_MAX:
             raise web.HTTPBadGateway
         return web.Response(body=body, content_type=content_type, headers={
             "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",

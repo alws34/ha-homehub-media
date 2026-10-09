@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import quote
 
@@ -7,6 +8,7 @@ import voluptuous as vol
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.homehub_media.ambience import STATE_PATH
+from custom_components.homehub_media.api import _signed
 from custom_components.homehub_media.const import DOMAIN
 
 
@@ -17,6 +19,19 @@ async def test_subscribe_sends_snapshot(hass, hass_ws_client, setup_entry):
     ev = await ws.receive_json()
     assert ev["event"]["activity"]["current"] in ("off", "tv", "box", "pc") and "ambience" in ev["event"]
     assert ev["event"]["apps"][0] == {"key": "netflix", "name": "Netflix", "installed": False}
+
+
+async def test_signed_urls_stable_within_the_hour(hass, freezer):
+    # what the subscribe/catalog/library handlers sign with; a jumped loop clock would close a real websocket
+    conn, art = SimpleNamespace(refresh_token_id="token-id"), "/api/homehub_media/art/plex/abc"
+    freezer.move_to("2026-10-09 12:00:05")
+    first = _signed(hass, conn, art)
+    freezer.tick(600)  # a new signature would carry a new iat
+    second = _signed(hass, conn, art)
+    freezer.tick(3600)
+    third = _signed(hass, conn, art)
+    assert first.startswith(f"{art}?authSig=") and first == second != third
+    assert _signed(hass, conn, "/local/Ambience/a.webp") == "/local/Ambience/a.webp"
 
 
 async def test_send_text_validation(hass, setup_entry):
@@ -54,6 +69,8 @@ async def test_art_proxy_headers_and_types(hass, hass_client, setup_entry):
     assert resp.headers["Content-Security-Policy"] == "default-src 'none'"
     assert resp.headers["Cache-Control"] == "private, max-age=3600"
     srv.fetch_art.return_value = (b"<svg onload=alert(1)/>", "image/svg+xml")
+    assert (await client.get("/api/homehub_media/art/plex/abc")).status == 502
+    srv.fetch_art.return_value = (b"\0" * (5 * 1024 * 1024 + 1), "image/jpeg")
     assert (await client.get("/api/homehub_media/art/plex/abc")).status == 502
     srv.fetch_art.side_effect = ServiceValidationError("Invalid art key")
     assert (await client.get("/api/homehub_media/art/plex/abc")).status == 404
