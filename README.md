@@ -72,7 +72,7 @@ Open **Settings › Devices & services › HomeHub Media › Configure**. Every 
 | **Media PC** | Host, ambient player and coordinator ports and tokens, how the TV switches to the PC's input, and the apps the PC may open. Both daemons are checked when you submit. See [media-pc/README.md](media-pc/README.md). |
 | **Keyboard bridge** | Host and shared key of the ESP32 keyboard bridge. |
 | **Ambience** | Where ambience plays (Samsung TV, or Media PC once the media PC is set up), internet radio stations for soundtracks, and YouTube videos for visuals (see [YouTube ambience](#youtube-ambience)). |
-| **Ambience modes** | Add, edit, or delete modes: name, icon, lighting scene, flickering lights, and a lights-only switch. Seven starter modes are included: Fireplace, Dinner, Reading, Game Night, Chill, Movie Time (lights only), and DOG TV. A new mode's ID comes from its name, for example `game_night`, and stays the same if you rename it. |
+| **Ambience modes** | Add, edit, or delete modes: name, icon, lighting scene, flickering lights, and a lights-only switch. Eight starter modes are included: Fireplace, Dinner, Reading, Game Night, Chill, Starry Night, Movie Time (lights only), and Cat TV. A new mode's ID comes from its name, for example `game_night`, and stays the same if you rename it. |
 | **Volume** | Normal volume (default 19) and quiet volume (default 10), which need the TV media player, plus an optional entity that, while it is on, blocks switching to any activity except Off. |
 | **Times of day** | Start time and ambience mode for morning, afternoon, evening, and night (defaults 06:00, 12:00, 18:00, 22:00), and the idle time before auto ambience starts (default 10 minutes, 1 to 240). No mode is set by default, so auto ambience does nothing until you choose modes here. |
 | **Voice assistant** | Provider (Ollama, OpenAI, or Claude, or None to turn it off), URL or API key, and model. |
@@ -173,20 +173,23 @@ The videos appear in the card's visual carousel in the order you entered them, w
 **What happens on the TV**
 
 1. HomeHub switches the activity to Samsung TV and sets the mode's lights.
-2. It asks the TV's YouTube app to play the video over DIAL, the protocol phones use to cast to the TV.
-3. If YouTube was not running, YouTube first shows its "Who's watching?" profile picker. About 8 seconds later HomeHub presses OK on the TV, which picks the highlighted profile, and asks for the video again.
-4. About 3 seconds after that, HomeHub presses OK once more to show the video full screen.
+2. If YouTube is not on screen, HomeHub opens it.
+3. HomeHub connects to YouTube as a remote, the way the YouTube app on a phone does ("Link with TV"), and asks it to play the video. The video always starts from the beginning, full screen.
+4. When the video ends, HomeHub plays it again, so it loops for as long as the mode runs. YouTube's autoplay is turned off, so no other video follows.
 
-If YouTube is already open, for example when you switch from one YouTube mode to another or pick another YouTube video in the editor while the mode runs, only the last step runs. The profile picker's timing varies, so if the OK presses land too early or too late, press OK on the TV remote.
+The first time, HomeHub pairs with YouTube on its own: it reads the TV's YouTube screen ID while YouTube is open and links to it. You do not enter a code on the TV. The pairing is saved, and HomeHub pairs again by itself if YouTube forgets it.
+
+When YouTube is already open, for example when you switch from one YouTube mode to another or pick another YouTube video in the editor while the mode runs, the new video replaces the old one in about 2 seconds, without closing YouTube. A cold start, with YouTube closed, takes longer while the app opens; HomeHub retries for about 20 seconds until YouTube reports that the video plays.
 
 Notes:
 
-- A YouTube video plays with its own sound. The mode's soundtrack, the mix, loop, and random-start settings are not used with a YouTube visual. Set the volume with the TV.
+- A YouTube video plays with its own sound. The mode's soundtrack, the mix, loop, and random-start settings are not used with a YouTube visual: the video always loops from the start. Set the volume with the TV.
 - Without YouTube Premium, YouTube may show ads.
 - If YouTube leaves the screen (you press HOME, open another app, or turn the TV off), HomeHub notices within about a minute and a half (it checks every 30 seconds, after a one-minute grace period), stops the mode, and restores the lights. Stopping the mode closes YouTube.
 - The sleep timer does not fade a YouTube video. It stops it at the end time.
 - YouTube videos also work when ambience plays on the media PC. A YouTube mode then switches to Samsung TV, and a local-file mode switches back to the media PC.
-- DIAL must be on. It is on by default on Samsung TVs.
+- Home Assistant needs internet access: the remote connection goes through YouTube's servers.
+- DIAL must be on (HomeHub reads the screen ID and closes YouTube over it). It is on by default on Samsung TVs.
 
 ## Card
 

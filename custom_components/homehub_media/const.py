@@ -12,6 +12,7 @@ CONF_HOST = "host"
 CONF_MAC = "mac"
 CONF_TOKEN = "token"
 CONF_PORT = "port"  # 8002 (wss) default
+CONF_YOUTUBE = "youtube_lounge"  # YouTube lounge auth (pyytlounge AuthState.serialize()), paired on first use
 CLIENT_NAME = "HomeHub"
 
 # option sections (entry.options[SECTION] is a dict)
@@ -38,11 +39,12 @@ DEFAULT_MODES = [
     {"id": "reading", "name": "Reading", "icon": "mdi:book-open-variant", "scene": None, "flicker": [], "lights_only": False},
     {"id": "game_night", "name": "Game Night", "icon": "mdi:dice-multiple", "scene": None, "flicker": [], "lights_only": False},
     {"id": "chill", "name": "Chill", "icon": "mdi:sofa", "scene": None, "flicker": [], "lights_only": False},
+    {"id": "starry_night", "name": "Starry Night", "icon": "mdi:weather-night", "scene": None, "flicker": [], "lights_only": False},
     {"id": "movie_time", "name": "Movie Time", "icon": "mdi:movie-open", "scene": None, "flicker": [], "lights_only": True},
-    {"id": "dog_tv", "name": "DOG TV", "icon": "mdi:dog", "scene": None, "flicker": [], "lights_only": False},
+    {"id": "cat_tv", "name": "Cat TV", "icon": "mdi:cat", "scene": None, "flicker": [], "lights_only": False},
 ]
 PREFERRED_VISUAL = {"fireplace": "fireplace", "dinner": "aquarium", "reading": "hogwarts",
-                    "game_night": "abstract", "chill": "rain", "dog_tv": "dog_tv"}
+                    "game_night": "abstract", "chill": "rain", "cat_tv": "cat_tv"}
 DEFAULT_VOLUME = {"normal": 19, "quiet": 10, "block_entity": None}
 DEFAULT_DAYPARTS = {"morning": {"start": "06:00", "mode": None}, "afternoon": {"start": "12:00", "mode": None},
                     "evening": {"start": "18:00", "mode": None}, "night": {"start": "22:00", "mode": None},

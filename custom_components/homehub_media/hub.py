@@ -25,6 +25,7 @@ from .const import (
     CONF_MAC,
     CONF_PORT,
     CONF_TOKEN,
+    CONF_YOUTUBE,
     DEFAULT_DAYPARTS,
     DEFAULT_MODES,
     DEFAULT_VOLUME,
@@ -98,7 +99,7 @@ class Hub:
         self._unsubs: list[Callable[[], None]] = []
         data, pc, kb = entry.data, self.options.get(OPT_PC), self.options.get(OPT_KEYBOARD)
         self.tv = SamsungTV(hass, data[CONF_HOST], data.get(CONF_TOKEN), data.get(CONF_MAC),
-                            data.get(CONF_PORT, 8002), on_change=self._tv_changed)
+                            data.get(CONF_PORT, 8002), on_change=self._tv_changed, lounge_auth=data.get(CONF_YOUTUBE))
         self.pc_ambient = AmbientPlayerClient(hass, pc["host"], pc["ambient_port"], pc["ambient_token"]) if pc else None
         self.pc_coord = CoordinatorClient(hass, pc["host"], pc["coord_port"], pc["coord_token"]) if pc else None
         self.keyboard = KeyboardBridge(hass, kb["host"], kb["key"]) if kb else None
@@ -157,8 +158,12 @@ class Hub:
 
     @callback
     def _tv_changed(self) -> None:
-        if self.tv.token != self.entry.data.get(CONF_TOKEN):  # the TV rotated the token: keep it, no reload
-            self.hass.config_entries.async_update_entry(self.entry, data={**self.entry.data, CONF_TOKEN: self.tv.token})
+        # the TV rotated the token or YouTube was (re)paired: keep it, no reload
+        data = {**self.entry.data, CONF_TOKEN: self.tv.token}
+        if self.tv.lounge_auth:
+            data[CONF_YOUTUBE] = self.tv.lounge_auth
+        if data != self.entry.data:
+            self.hass.config_entries.async_update_entry(self.entry, data=data)
         self.async_notify()
 
     @callback

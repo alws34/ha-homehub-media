@@ -430,8 +430,9 @@
           "reading": "Reading",
           "game_night": "Game Night",
           "chill": "Chill",
+          "starry_night": "Starry Night",
           "movie_time": "Movie Time",
-          "dog_tv": "DOG TV"
+          "cat_tv": "Cat TV"
         }
       },
       "activity": {

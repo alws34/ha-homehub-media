@@ -6,6 +6,7 @@ import contextlib
 import logging
 import re
 import socket
+import time
 import unicodedata
 from collections.abc import Callable
 from typing import Any
@@ -15,6 +16,13 @@ import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from pyytlounge import EventListener, NowPlayingEvent, PlaybackStateEvent, State, YtLoungeApi
+from pyytlounge.exceptions import (
+    NotConnectedException,
+    NotLinkedException,
+    NotPairedException,
+    NotSupportedException,
+)
 from samsungtvws import async_connection
 from samsungtvws.async_remote import SamsungTVWSAsyncRemote
 from samsungtvws.exceptions import ConnectionFailure, UnauthorizedError
@@ -35,10 +43,12 @@ APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 REST_TIMEOUT = aiohttp.ClientTimeout(total=5)  # REST (8001) and DIAL (8080)
 WS_ERRORS = (ConnectionFailure, WebSocketException, OSError)
 URL_VISIBLE_SECS = 5  # wait for the browser to come to the front after a URL launch
-# ponytail: calibration knobs. A cold YouTube start shows the "who's watching" picker, whose timing varies.
-YT_COLD_WAIT = 8  # s from the first DIAL launch to the OK that picks the profile
-YT_WARM_WAIT = 3  # s from a DIAL launch to the OK that enters fullscreen
 YT_ORIGIN = "package:com.google.android.youtube"  # without it the TV's DIAL server answers 403
+# ponytail: tuning knobs. A warm switch reports the new video in ~2 s; a cold start may drop the lounge session.
+YT_START_SECS, YT_ACK_SECS, YT_PAIR_SECS = 20, 5, 10  # whole start, one play_video's NowPlaying, DIAL screenId
+# what pyytlounge raises when the session or YouTube's lounge server fails (it re-raises parse errors as they are)
+LOUNGE_ERRORS = (aiohttp.ClientError, TimeoutError, LookupError, ValueError, NotConnectedException,
+                 NotLinkedException, NotPairedException, NotSupportedException)
 _LOGGER = logging.getLogger(__name__)
 FLAGS = {  # TV event -> (attribute, value)
     "ms.remote.imeStart": ("keyboard_active", True),
@@ -63,6 +73,14 @@ class TVRemote(SamsungTVWSAsyncRemote):
     def _websocket_event(self, event: str, response: dict[str, Any]) -> None:  # startup and listen loop alike
         super()._websocket_event(event, response)
         self._on_tv_event(event)
+
+
+class LoungeListener(EventListener):
+    """Hands the YouTube lounge's playback events to the TV."""
+
+    def __init__(self, on_event: Callable[[NowPlayingEvent | PlaybackStateEvent], Any]) -> None:
+        super().__init__()
+        self.now_playing_changed = self.playback_state_changed = on_event
 
 
 class PairingDenied(HomeAssistantError):
@@ -93,14 +111,21 @@ class SamsungTV:
     """Single client for one TV; the WebSocket is opened lazily and reopened when dead."""
 
     def __init__(self, hass: HomeAssistant, host: str, token: str | None, mac: str | None,
-                 port: int = 8002, on_change: Callable[[], None] | None = None) -> None:
+                 port: int = 8002, on_change: Callable[[], None] | None = None, lounge_auth: dict | None = None) -> None:
         self.hass, self.host, self.token, self.mac, self.port = hass, host, token, mac, port
+        self.lounge_auth = lounge_auth  # YouTube lounge pairing (AuthState.serialize()); Hub persists it
         self._on_change = on_change
         self.available = self.keyboard_active = self.pointer_active = False
         self.browser_id = APP_CATALOG["browser"]["ids"][0]  # replaced by discover_apps()
         self._remote: SamsungTVWSAsyncRemote | None = None
         self._lock = asyncio.Lock()
         self._text_sent = False
+        self._yt_video: str | None = None  # the video to loop, set from play_youtube() to stop_youtube()
+        self._yt_now: str | None = None  # the video YouTube last reported
+        self._yt_api: YtLoungeApi | None = None
+        self._yt_sub: asyncio.Task | None = None  # the lounge session's event stream
+        self._yt_lock = asyncio.Lock()
+        self._yt_started = asyncio.Event()
 
     def _notify(self) -> None:
         if self._on_change:
@@ -232,35 +257,99 @@ class SamsungTV:
         except (aiohttp.ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect("TV is off or unreachable") from err
 
-    async def youtube_state(self) -> str:
-        """"running", "stopped", or "unknown" (unreachable, or another DIAL state)."""
-        try:
-            status, body = await self._dial("GET")
-        except CannotConnect:
-            return "unknown"
-        state = re.search(r"<state>\s*([a-z]+)\s*</state>", body) if status == 200 else None
-        return state[1] if state and state[1] in ("running", "stopped") else "unknown"
+    async def _screen_id(self) -> str:
+        """YouTube's lounge screen id; DIAL lists it only while YouTube runs."""
+        for _ in range(YT_PAIR_SECS * 2):
+            with contextlib.suppress(CannotConnect):
+                if found := re.search(r"<screenId>\s*([^<\s]+)\s*</screenId>", (await self._dial("GET"))[1]):
+                    return found[1]
+            await asyncio.sleep(0.5)
+        raise HomeAssistantError("YouTube on the TV did not offer a screen id to pair with")
 
-    async def _youtube_post(self, video_id: str) -> None:
-        status, _ = await self._dial("POST", f"v={video_id}&t=0")
-        if status not in (200, 201):  # 201: started, 200: already running
-            raise HomeAssistantError(f"TV did not start YouTube (HTTP {status})")
+    async def _lounge(self) -> YtLoungeApi | None:
+        """The connected lounge session while a video is set: kept, reconnected, or paired again (saved auth
+        first; a fresh pairing needs YouTube running)."""
+        async with self._yt_lock:
+            if not self._yt_video or (self._yt_api and self._yt_api.connected()):
+                return self._yt_api
+            if self._yt_sub:
+                self._yt_sub.cancel()
+            api = YtLoungeApi(CLIENT_NAME, LoungeListener(self._yt_event), _LOGGER)
+            api.session = async_get_clientsession(self.hass)  # HA's shared session: nothing to close
+            ok = False
+            if self.lounge_auth:
+                with contextlib.suppress(*LOUNGE_ERRORS):
+                    api.load_auth_state(self.lounge_auth)
+                    ok = await api.refresh_auth() and await api.connect()
+            if not ok and not (await api.pair_with_screen_id(await self._screen_id()) and await api.connect()):
+                raise CannotConnect("YouTube on the TV refused the lounge connection")
+            self._yt_api = api
+            self._yt_sub = self.hass.async_create_background_task(self._subscribe(api), "homehub_media_youtube")
+            if (auth := api.auth.serialize()) != self.lounge_auth:  # new pairing or refreshed token
+                self.lounge_auth = auth
+                self._notify()
+            return api
 
-    async def play_youtube(self, video_id: str) -> None:
-        """Play a video fullscreen; a cold start first passes the profile picker with one OK."""
+    @staticmethod
+    async def _subscribe(api: YtLoungeApi) -> None:
+        with contextlib.suppress(*LOUNGE_ERRORS):  # a dropped session reconnects on the next _lounge()
+            await api.subscribe()
+
+    async def _yt_event(self, event: NowPlayingEvent | PlaybackStateEvent) -> None:
+        if isinstance(event, NowPlayingEvent):
+            self._yt_now = event.video_id
+            if event.video_id and event.video_id == self._yt_video:
+                self._yt_started.set()
+        # YouTube's "ended" (code 0, State.Buffering) at the end: play it again (seek_to(0) does nothing then)
+        if (self._yt_video and self._yt_now == self._yt_video and event.state is State.Buffering
+                and event.duration and (event.current_time or 0) >= event.duration):
+            with contextlib.suppress(*LOUNGE_ERRORS):
+                await self._yt_api.play_video(self._yt_video)
+
+    async def play_youtube(self, video_id: str, app_id: str) -> None:
+        """Play a video fullscreen from 0:00 and loop it until stop_youtube(). YouTube takes lounge commands
+        only while it is open, and a cold start may drop the session: retry until it reports the video."""
         if not YT_ID_RE.fullmatch(video_id):
             raise ServiceValidationError("Invalid YouTube video id")
-        cold = await self.youtube_state() != "running"
-        await self._youtube_post(video_id)
-        if cold:
-            await asyncio.sleep(YT_COLD_WAIT)
-            await self.send_key("KEY_ENTER")  # picks the highlighted profile
-            await self._youtube_post(video_id)
-        await asyncio.sleep(YT_WARM_WAIT)
-        await self.send_key("KEY_ENTER")  # player overlay -> fullscreen
+        self._yt_video = video_id
+        if not (await self.app_info(app_id) or {}).get("visible"):
+            await self.launch(app_id)
+        deadline = time.monotonic() + YT_START_SECS
+        while True:
+            try:
+                async with asyncio.timeout(YT_START_SECS):  # YouTube's servers hanging must not hold the locks
+                    api = await self._lounge()
+                    await api.set_auto_play_mode(False)
+                    self._yt_started.clear()
+                    if await api.play_video(video_id):  # False: the session ended, the next _lounge() reconnects
+                        async with asyncio.timeout(YT_ACK_SECS):
+                            await self._yt_started.wait()
+                        return
+                err: Exception = CannotConnect("YouTube lounge session ended")
+            except (*LOUNGE_ERRORS, HomeAssistantError) as exc:
+                err = exc
+            _LOGGER.debug("YouTube start attempt failed: %r", err)
+            if time.monotonic() > deadline:
+                raise HomeAssistantError("YouTube on the TV did not start the video") from err
+            await asyncio.sleep(1)
+
+    async def youtube_keepalive(self) -> None:
+        """Reconnect a dropped lounge session so the video keeps looping."""
+        try:
+            async with asyncio.timeout(YT_START_SECS):
+                await self._lounge()
+        except (*LOUNGE_ERRORS, HomeAssistantError) as err:
+            _LOGGER.debug("YouTube lounge reconnect failed: %r", err)
 
     async def stop_youtube(self, app_id: str) -> None:
-        """Close YouTube over DIAL; REST (YouTube's Tizen `app_id`) when DIAL fails."""
+        """End the lounge session, then close YouTube over DIAL; REST (YouTube's Tizen `app_id`) when DIAL fails."""
+        async with self._yt_lock:
+            self._yt_video, api, self._yt_api = None, self._yt_api, None
+            if self._yt_sub:
+                self._yt_sub.cancel()
+            if api and api.connected():
+                with contextlib.suppress(*LOUNGE_ERRORS):
+                    await api.disconnect()
         with contextlib.suppress(CannotConnect):
             if (await self._dial("DELETE", run=True))[0] in (200, 204, 404):  # 404: not running
                 return
