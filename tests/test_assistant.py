@@ -61,7 +61,7 @@ async def test_openai_compatible_for_ollama(hass, monkeypatch):
 
 
 async def test_tool_validates_and_calls_hub(hass):
-    hub = SimpleNamespace(ambience=SimpleNamespace(start=AsyncMock(return_value=None), modes=lambda: [{"id": "dinner", "name": "Dinner"}]))
+    hub = SimpleNamespace(last_command=0, ambience=SimpleNamespace(start=AsyncMock(return_value=None), modes=lambda: [{"id": "dinner", "name": "Dinner"}]))
     api = a.HomeHubLLMAPI(hass)
     assert (api.id, api.name) == (a.API_ID, "HomeHub Media")
     ctx = llm.LLMContext(platform="test", context=None, language="en", assistant="conversation", device_id=None)
@@ -77,6 +77,7 @@ async def test_tool_validates_and_calls_hub(hass):
     assert "dinner (Dinner)" in inst.api_prompt
     assert await inst.async_call_tool(call) == {"success": True}
     hub.ambience.start.assert_awaited_once_with("dinner")
+    assert hub.last_command > 0  # voice counts as user activity
     for bad in ("../etc", "dinner\n", "reading"):  # model output is untrusted; only configured modes
         with pytest.raises(vol.Invalid):
             await inst.async_call_tool(llm.ToolInput("AmbienceStart", {"mode": bad}))

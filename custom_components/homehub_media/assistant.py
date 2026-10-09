@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -51,7 +52,9 @@ class HubTool(llm.Tool):
     async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput,
                          llm_context: llm.LLMContext) -> JsonObjectType:
         args = self.parameters(tool_input.tool_args)  # HA 2026.9 does not validate; model output is untrusted
-        return await self._run(_hub(hass), **args) or {"success": True}
+        hub = _hub(hass)
+        hub.last_command = time.monotonic()  # voice is user activity (auto-ambience idle detection)
+        return await self._run(hub, **args) or {"success": True}
 
 
 async def _play(hub: Any, title: str) -> dict:
