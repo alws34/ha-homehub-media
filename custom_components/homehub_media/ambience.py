@@ -6,6 +6,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
+from functools import partial
 from pathlib import Path
 from urllib.parse import quote
 
@@ -90,6 +91,7 @@ class AmbienceManager:
         self._snapshot = False  # scene.homehub_media_snapshot holds the pre-ambience lights
         self._fade_secs: int | None = None
         self._started = 0.0
+        self._gen = 0  # bumped by start(); timers and checks capture it
         self._jobs: list = []   # flicker task, health interval, autoplay key timer of the running mode
         self._sleep: list = []  # sleep timer chain (timer, PC fade task)
         self._unsub_idle = None
@@ -152,6 +154,7 @@ class AmbienceManager:
 
     async def refresh_catalog(self) -> None:
         if self._backend == "pc":
+            await self._hub.pc_ambient.refresh()  # rescan the PC's disk
             data = await self._hub.pc_ambient.catalog()
             found = {key: [{"id": i["id"], "kind": key[:-1], "title": str(i.get("title") or i["id"]),
                             "source_type": "stream" if i.get("source_type") == "stream" else "file",
@@ -191,18 +194,22 @@ class AmbienceManager:
             raise ServiceValidationError(str(err)) from err
         lighting = bool(mode["scene"] or mode["flicker"])
         async with self._lock:
+            self._gen += 1  # in-flight health checks / sleep timers of the previous run become no-ops
+            need_activity = not mode["lights_only"] and (
+                self._backend == "pc" or self._hub.activity.current != "tv" or not self._hub.tv.available)
+            # TV page already up and staying up: swap media in place (the page changes URLs without a reload)
+            swap = self.uses_media and self._backend == "tv" and not mode["lights_only"] and not need_activity
             if self.mode != "off":  # switching: keep the pre-ambience snapshot if the new mode drives lights
                 # ponytail: lights only the new mode touches are not in the kept snapshot, so stay as set
-                await self._stop(restore_lights=not lighting)
+                await self._stop(restore_lights=not lighting, keep_page=swap)
             try:
-                # before self.mode is set: activity.set() stops a running media ambience
-                if not mode["lights_only"] and (self._backend == "pc" or self._hub.activity.current != "tv"):
+                if need_activity:  # before self.mode is set: activity.set() stops a running media ambience
                     await self._hub.activity.set(self._backend)
                 if lighting:
                     await self._lights(mode)
                 self.mode, self.uses_media, self._comp, self.error = mode_id, not mode["lights_only"], comp, None
                 if self.uses_media:
-                    await self._play(comp)
+                    await self._play(comp, swap)
             except Exception as err:
                 self.error = str(err) if isinstance(err, HomeAssistantError) else "Could not start ambience"
                 await self._stop()
@@ -241,15 +248,18 @@ class AmbienceManager:
                     _LOGGER.debug("Flicker step failed: %s", err)
                 await asyncio.sleep(secs)
 
-    async def _play(self, comp: dict) -> None:
+    async def _play(self, comp: dict, swap: bool = False) -> None:
         if self._backend == "pc":
             await self._hub.pc_ambient.play(comp)
         else:
             self.page_version += 1
-            await self._hub.tv.open_url(self._page_url())
-            self._jobs.append(async_call_later(self.hass, ENTER_DELAY_SECS, self._press_enter))
-        self._started = self.page_last_seen = time.monotonic()
-        self._jobs.append(async_track_time_interval(self.hass, self._health, timedelta(seconds=HEALTH_SECS)))
+            if not swap:
+                await self._hub.tv.open_url(self._page_url())
+                self.page_last_seen = time.monotonic()  # counts as alive while it loads
+                self._jobs.append(async_call_later(self.hass, ENTER_DELAY_SECS, self._press_enter))
+        self._started = time.monotonic()
+        self._jobs.append(async_track_time_interval(
+            self.hass, partial(self._health, self._gen), timedelta(seconds=HEALTH_SECS)))
 
     def _page_url(self) -> str:
         base = (self._hub.options.get(OPT_TV) or {}).get("base_url") or get_url(
@@ -266,17 +276,23 @@ class AmbienceManager:
         async with self._lock:
             await self._stop(restore_lights)
 
-    async def _stop(self, restore_lights: bool = True) -> None:
+    async def _stop_if(self, gen: int, _now: datetime | None = None) -> None:
+        """Stop only if no start() happened since `gen` was captured (stale timers/checks are no-ops)."""
+        async with self._lock:
+            if gen == self._gen:
+                await self._stop()
+
+    async def _stop(self, restore_lights: bool = True, keep_page: bool = False) -> None:
         await _cancel(self._jobs)
         await _cancel(self._sleep)
         self.sleep_until = self._fade_secs = None
-        if self.uses_media:
+        if self.uses_media and not keep_page:
             self.uses_media = False
             self.page_version += 1  # page sees stop: true
             try:
                 if self._backend == "pc":
                     await self._hub.pc_ambient.stop()
-                else:
+                elif time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS:  # never HOME the user's app
                     await self._hub.tv.send_key("KEY_HOME")
             except HomeAssistantError as err:
                 _LOGGER.warning("Could not stop ambience media: %s", err)
@@ -325,7 +341,7 @@ class AmbienceManager:
 
     # ---- health, sleep timer, dayparts ------------------------------------------------------------
 
-    async def _health(self, _now: datetime) -> None:
+    async def _health(self, gen: int, _now: datetime) -> None:
         if self._backend == "pc":
             try:
                 gone = (await self._hub.pc_ambient.status()).get("state") == "idle"
@@ -337,7 +353,7 @@ class AmbienceManager:
             gone = now - self._started > PAGE_GRACE_SECS and now - self.page_last_seen > PAGE_TIMEOUT_SECS
         if gone:
             _LOGGER.info("Ambience playback ended, stopping %s", self.mode)
-            await self.stop()
+            await self._stop_if(gen)
 
     async def set_sleep_timer(self, minutes: int) -> None:
         await _cancel(self._sleep)
@@ -346,20 +362,18 @@ class AmbienceManager:
             if self.mode == "off":
                 raise ServiceValidationError("No ambience mode is running")
             self.sleep_until = dt_util.utcnow() + timedelta(minutes=minutes)
-            self._sleep.append(async_call_later(self.hass, minutes * 60 - FADE_SECS, self._sleep_fade))
+            self._sleep.append(async_call_later(
+                self.hass, minutes * 60 - FADE_SECS, partial(self._sleep_fade, self._gen)))
         self._hub.async_notify()
 
-    async def _sleep_fade(self, _now: datetime) -> None:
+    async def _sleep_fade(self, gen: int, _now: datetime) -> None:  # no await: cannot interleave with start()
         if self.uses_media and self._backend == "pc":
             self._sleep.append(self.hass.async_create_background_task(
                 self._fade_pc(dict(self._comp)), "homehub_media_fade"))
         elif self.uses_media:
             self._fade_secs = FADE_SECS
             self.page_version += 1
-        self._sleep.append(async_call_later(self.hass, FADE_SECS, self._sleep_stop))
-
-    async def _sleep_stop(self, _now: datetime) -> None:
-        await self.stop()
+        self._sleep.append(async_call_later(self.hass, FADE_SECS, partial(self._stop_if, gen)))
 
     async def _fade_pc(self, comp: dict) -> None:
         for step in range(5, -1, -1):  # 6 PATCH calls over FADE_SECS, the last one at volume 0
@@ -387,7 +401,8 @@ class AmbienceManager:
 
     async def _idle_check(self, _now: datetime) -> None:
         hub, tv = self._hub, self._hub.options.get(OPT_TV) or {}
-        if not self.auto or self.mode != "off" or hub.activity.current != "tv" or not self.daypart_mode():
+        if (self._unsub_idle is None or not self.auto or self.mode != "off" or hub.activity.current != "tv"
+                or not self.daypart_mode()):  # _unsub_idle None: unloading
             return
         app = tv.get("app_entity") and self.hass.states.get(tv["app_entity"])
         if ((self.hass.states.is_state(tv["entity"], "on") if tv.get("entity") else hub.tv.available)
