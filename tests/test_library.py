@@ -10,11 +10,28 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
-from custom_components.homehub_media.library import JellyfinServer, Library, PlexServer
+from custom_components.homehub_media.library import InvalidAuth, JellyfinServer, Library, PlexServer
 
 PLEX = "http://plex.local:32400"
 JF = "http://jf.local:8096"
 JPEG = {"Content-Type": "image/jpeg"}
+
+
+async def test_auth_rejection_is_typed(hass, aioclient_mock):
+    aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", status=401)
+    aioclient_mock.get(f"{JF}/UserItems/Resume", status=500)
+    with pytest.raises(InvalidAuth):
+        await PlexServer(hass, PLEX, "bad", None).continue_watching()
+    with pytest.raises(HomeAssistantError) as err:
+        await JellyfinServer(hass, JF, "key", "u1", None).continue_watching()
+    assert not isinstance(err.value, InvalidAuth)
+
+
+async def test_jellyfin_users(hass, aioclient_mock):
+    aioclient_mock.get(f"{JF}/Users", json=[{"Id": "u1", "Name": "alon"}, {"Id": "u2"}])
+    assert await JellyfinServer(hass, JF, "key", "", None).users() == [
+        {"id": "u1", "name": "alon"}, {"id": "u2", "name": "u2"}]
+    assert aioclient_mock.mock_calls[0][3]["Authorization"] == 'MediaBrowser Token="key"'
 
 
 async def test_plex_continue_normalised(hass, aioclient_mock):
