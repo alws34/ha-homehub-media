@@ -137,6 +137,7 @@ async def test_sleep_timer_fades_then_stops(hass):
     am = await manager(hass, chill())
     await am.start("chill")
     await am.set_sleep_timer(2)
+    am._hub.last_command = 0
     assert am.sleep_until is not None and am.sleep_until > dt_util.utcnow() + timedelta(seconds=100)
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
@@ -145,6 +146,7 @@ async def test_sleep_timer_fades_then_stops(hass):
     await hass.async_block_till_done()
     assert am.mode == "off" and am.sleep_until is None
     am._hub.tv.send_key.assert_awaited_with("KEY_HOME")
+    assert am._hub.last_command > 0  # the stop counts as activity: idle auto ambience must not restart it
 
 
 async def test_sleep_timer_needs_a_running_mode(hass):
@@ -285,6 +287,7 @@ async def test_refresh_catalog_tv_scans_and_strips_server_keys(hass, tmp_path):
     (vids / "Rain.mp4").write_bytes(b"x"); (vids / "Rain.webp").write_bytes(b"x")
     am = AmbienceManager(hass, hub_with(chill(radio={"radio_x": "https://example.com/live"})), HomeHubStore(hass))
     await am.async_load()
+    await am.async_load_catalog()
     await am.set_favorite("visual", "rain", True)
     c = am.catalog()
     assert c["visuals"] == [{"id": "rain", "kind": "visual", "title": "Rain", "source_type": "file", "live": False,
@@ -306,6 +309,7 @@ async def test_idle_auto_start(hass, tmp_path):
     am._hub.activity.current = "tv"; am._hub.tv.available = True
     am._hub.last_command = time.monotonic() - 3600
     await am.async_load()
+    await am.async_load_catalog()
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
     assert am.mode == "off"  # auto is off

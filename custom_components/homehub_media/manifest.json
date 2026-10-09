@@ -22,8 +22,7 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/alws34/ha-homehub-media/issues",
   "requirements": [
-    "samsungtvws[async,encrypted]>=3.0.5",
-    "wakeonlan>=3.0.0"
+    "samsungtvws[async,encrypted]>=3.0.5"
   ],
   "single_config_entry": true,
   "version": "0.1.0"
