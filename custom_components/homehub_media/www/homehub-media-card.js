@@ -170,7 +170,8 @@ class HomeHubMediaCard extends HTMLElement {
     try {
       await sub;
     } catch (err) {
-      if (this._sub === sub) this._sub = null;
+      if (this._sub !== sub) return;  // a stale attempt from before a disconnect/reconnect
+      this._sub = null;
       this._retryAt = Date.now() + 30000;
       this._fatal = err?.code === "unknown_command"
         ? "HomeHub Media is not set up. Add the integration first."
