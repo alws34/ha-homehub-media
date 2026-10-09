@@ -422,6 +422,20 @@ async def test_play_youtube_cold_start_retries_after_the_session_drops(hass, aio
     await tv.stop_youtube("111299001912")
 
 
+async def test_play_youtube_drops_a_session_that_ignores_plays(hass, aioclient_mock, lounge, monkeypatch):
+    """Connected before the cold-started app was ready: YouTube accepts plays on it but never plays them."""
+    async def deaf(api, video_id):  # still connected, never reports the video
+        lounge.on_play = tv_plays
+    lounge.on_play = deaf
+    monkeypatch.setattr(tvmod, "YT_ACK_SECS", 0.01)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    with patch.object(asyncio, "sleep", AsyncMock()):
+        await tv.play_youtube(VID, "111299001912")
+    first, second = lounge.made
+    assert first.disconnected and second.played == [VID]  # a fresh session, not the deaf one again
+    await tv.stop_youtube("111299001912")
+
+
 async def test_play_youtube_gives_up_and_validates(hass, aioclient_mock, lounge, monkeypatch):
     lounge.on_play = None  # accepted, never reported
     monkeypatch.setattr(tvmod, "YT_ACK_SECS", 0.01)
