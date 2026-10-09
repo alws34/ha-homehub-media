@@ -51,10 +51,10 @@ class HomeHubConversationEntity(HomeHubEntity, conversation.ConversationEntity):
         except conversation.ConverseError as err:
             return err.as_conversation_result()
         tools = assistant.tool_specs(chat_log.llm_api)
-        for _ in range(MAX_ROUNDS):
-            try:
-                reply = await assistant.complete(self.hass, self.hub.options[OPT_ASSISTANT],
-                                                 chat_log.content[0].content, _messages(chat_log.content[1:]), tools)
+        for n in range(MAX_ROUNDS):
+            try:  # the last round must answer in text
+                reply = await assistant.complete(self.hass, self.hub.options[OPT_ASSISTANT], chat_log.content[0].content,
+                                                 _messages(chat_log.content[1:]), tools, final=n == MAX_ROUNDS - 1)
             except HomeAssistantError as err:  # "cannot_connect" / "invalid_auth", never the raw error
                 _LOGGER.warning("Assistant request failed: %s", err)
                 response = intent.IntentResponse(language=user_input.language)

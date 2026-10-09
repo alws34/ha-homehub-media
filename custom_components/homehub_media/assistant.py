@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
-import time
+import unicodedata
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -28,19 +28,15 @@ from homeassistant.util.json import JsonObjectType
 from probatio import to_openapi
 
 from .const import ACTIVITIES, APP_CATALOG, COMMANDS, DOMAIN, TEXT_MAX
+from .hub import loaded_hub
 
 API_ID = f"{DOMAIN}_tools"
 CLAUDE_MODEL = "claude-opus-5-5"
 REQ = {"openai": "openai>=2.45.0", "ollama": "openai>=2.45.0", "claude": "anthropic>=0.108.0"}
 REFUSAL = "Sorry, I can't help with that."
+TITLE_MAX = 100
 PROMPT = ("You control the living-room TV, its streaming apps and the room ambience (lights, visuals, sound) "
           "with the HomeHub Media tools. Replies are spoken aloud, so keep them to one short sentence.")
-
-
-def _hub(hass: HomeAssistant) -> Any:
-    if not (entries := hass.config_entries.async_loaded_entries(DOMAIN)):
-        raise HomeAssistantError("HomeHub Media is not loaded")
-    return entries[0].runtime_data
 
 
 class HubTool(llm.Tool):
@@ -52,9 +48,14 @@ class HubTool(llm.Tool):
     async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput,
                          llm_context: llm.LLMContext) -> JsonObjectType:
         args = self.parameters(tool_input.tool_args)  # HA 2026.9 does not validate; model output is untrusted
-        hub = _hub(hass)
-        hub.last_command = time.monotonic()  # voice is user activity (auto-ambience idle detection)
-        return await self._run(hub, **args) or {"success": True}
+        if not (hub := loaded_hub(hass)):
+            raise HomeAssistantError("HomeHub Media is not loaded")
+        return await hub.command(self._run(hub, **args)) or {"success": True}  # voice is user activity
+
+
+def _clean(text: str) -> str:
+    """Media-server text for the model: no format/control characters (hidden instructions), short."""
+    return "".join(c for c in text if unicodedata.category(c)[0] != "C")[:TITLE_MAX]
 
 
 async def _play(hub: Any, title: str) -> dict:
@@ -66,12 +67,13 @@ async def _play(hub: Any, title: str) -> dict:
     if item is None:
         raise HomeAssistantError(f"Nothing called {title!r} in continue watching or recently added")
     await hub.play_library_item(item["server"], item["id"])
-    return {"playing": item["title"]}
+    return {"playing": _clean(item["title"])}
 
 
 async def _now_playing(hub: Any) -> dict:
     playing = hub.library.now_playing if hub.library else []
-    return {"now_playing": [{k: v for k, v in p.items() if k != "image"} for p in playing]}
+    return {"now_playing": [{k: _clean(v) if isinstance(v, str) else v for k, v in p.items() if k != "image"}
+                            for p in playing]}
 
 
 TOOLS = [
@@ -103,8 +105,8 @@ class HomeHubLLMAPI(llm.API):
 
     async def async_get_api_instance(self, llm_context: llm.LLMContext) -> llm.APIInstance:
         prompt, modes = PROMPT, []
-        if entries := self.hass.config_entries.async_loaded_entries(DOMAIN):
-            modes = entries[0].runtime_data.ambience.modes()
+        if hub := loaded_hub(self.hass):
+            modes = hub.ambience.modes()
             prompt += " Ambience modes (id (name)): " + ", ".join(f"{m['id']} ({m['name']})" for m in modes) + "."
         start = HubTool("AmbienceStart", "Start an ambience mode (lights, visuals and sound) by its id.",
                         {vol.Required("mode"): vol.In([m["id"] for m in modes])},
@@ -133,24 +135,19 @@ def _api_errors() -> Iterator[None]:
         raise HomeAssistantError("invalid_auth" if status in (401, 403) else "cannot_connect") from err
 
 
-def _openai_client(cfg: dict) -> Any:
-    """AsyncOpenAI for OpenAI, or Ollama's OpenAI-compatible /v1 endpoint. Runs in the executor."""
-    import openai  # installed on demand by ensure_sdk
+def _sdk_client(cfg: dict) -> Any:
+    """AsyncAnthropic, or AsyncOpenAI for OpenAI / Ollama's OpenAI-compatible /v1. Runs in the executor."""
+    opts = {"timeout": 60, "max_retries": 1, "http_client": cfg["http_client"]}
+    if cfg["provider"] == "claude":
+        import anthropic  # installed on demand by ensure_sdk
 
-    url = f"{cfg['url'].rstrip('/')}/v1" if cfg["provider"] == "ollama" else None
-    client = openai.AsyncOpenAI(api_key=cfg.get("api_key") or "ollama", base_url=url, timeout=60,
-                                max_retries=1, http_client=cfg["http_client"])
+        client = anthropic.AsyncAnthropic(api_key=cfg["api_key"], **opts)
+    else:
+        import openai
+
+        url = f"{cfg['url'].rstrip('/')}/v1" if cfg["provider"] == "ollama" else None
+        client = openai.AsyncOpenAI(api_key=cfg.get("api_key") or "ollama", base_url=url, **opts)
     client.platform_headers()  # the SDK probes the OS (file reads) once and caches it; keep that off the loop
-    return client
-
-
-def _anthropic_client(cfg: dict) -> Any:
-    """AsyncAnthropic. Runs in the executor."""
-    import anthropic  # installed on demand by ensure_sdk
-
-    client = anthropic.AsyncAnthropic(api_key=cfg["api_key"], timeout=60, max_retries=1,
-                                      http_client=cfg["http_client"])
-    client.platform_headers()
     return client
 
 
@@ -158,8 +155,7 @@ async def _client(hass: HomeAssistant, cfg: dict) -> Any:
     # The executor hop keeps the first SDK import and OS probe off the loop; HA's shared httpx client
     # (created in the loop) carries the connection pool, so no per-call TLS setup and nothing to close.
     # ponytail: SDK wrapper object rebuilt per call; cache it per (provider, url, key) if that ever shows
-    factory = _anthropic_client if cfg["provider"] == "claude" else _openai_client
-    return await hass.async_add_executor_job(factory, {**cfg, "http_client": get_async_client(hass)})
+    return await hass.async_add_executor_job(_sdk_client, {**cfg, "http_client": get_async_client(hass)})
 
 
 async def ensure_sdk(hass: HomeAssistant, provider: str) -> None:
@@ -219,14 +215,19 @@ def _loads(args: str | None) -> Any:
         return {}  # malformed model JSON: the tool schema rejects it and the model can retry
 
 
-async def complete(hass: HomeAssistant, cfg: dict, system: str, messages: list[dict], tools: list[dict]) -> Reply:
-    """One model call; cfg is the assistant options section (provider, url, api_key, model)."""
+async def complete(hass: HomeAssistant, cfg: dict, system: str, messages: list[dict], tools: list[dict],
+                   final: bool = False) -> Reply:
+    """One model call; cfg is the assistant options section (provider, url, api_key, model).
+
+    final: the last round, so the model must answer in text. Claude still needs the tool definitions
+    (the history holds tool_use blocks), so it gets tool_choice none; OpenAI/Ollama just get no tools.
+    """
     with _api_errors():
         client = await _client(hass, cfg)
         if cfg["provider"] != "claude":
             msg = (await client.chat.completions.create(
                 model=cfg["model"], messages=_openai_messages(system, messages),
-                **({"tools": [{"type": "function", "function": t} for t in tools]} if tools else {}),
+                **({"tools": [{"type": "function", "function": t} for t in tools]} if tools and not final else {}),
             )).choices[0].message
             return Reply(msg.content or getattr(msg, "refusal", None) or "",
                          [(c.id, c.function.name, _loads(c.function.arguments)) for c in msg.tool_calls or []])
@@ -236,7 +237,8 @@ async def complete(hass: HomeAssistant, cfg: dict, system: str, messages: list[d
                "messages": _claude_messages(messages),
                **({"tools": [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
                              for t in tools],
-                   "tool_choice": {"type": "auto"}} if tools else {})}  # forced tool choice 400s on Opus 5.5
+                   # forced tool choice 400s on Opus 5.5; auto and none are fine
+                   "tool_choice": {"type": "none" if final else "auto"}} if tools else {})}
         try:
             resp = await client.messages.create(
                 **req,

@@ -53,13 +53,18 @@ async def test_switches(hass, setup_entry):
     assert hub.ambience.auto is True and hass.states.get(auto).state == "on"
 
 
-async def test_auto_ambience_restored(hass, setup_entry):
-    auto = _eid(hass, setup_entry, "switch", "auto_ambience")
+async def test_states_restored_without_rerunning(hass, setup_entry):
+    auto, quiet, activity = (_eid(hass, setup_entry, *k) for k in (
+        ("switch", "auto_ambience"), ("switch", "quiet_mode"), ("select", "activity")))
     assert await hass.config_entries.async_unload(setup_entry.entry_id)
-    mock_restore_cache(hass, [State(auto, "on")])
+    mock_restore_cache(hass, [State(auto, "on"), State(quiet, "on"), State(activity, "tv")])
     assert await hass.config_entries.async_setup(setup_entry.entry_id)
     await hass.async_block_till_done()
-    assert setup_entry.runtime_data.ambience.auto is True and hass.states.get(auto).state == "on"
+    hub = setup_entry.runtime_data
+    assert hub.ambience.auto is True and hass.states.get(auto).state == "on"
+    assert hub.activity.quiet is True and hass.states.get(quiet).state == "on"
+    assert hub.activity.current == "tv" and hass.states.get(activity).state == "tv"
+    hub.tv.send_key.assert_not_awaited()  # restored, not re-run: no HOME key, no input switch
 
 
 async def test_sensors(hass, setup_entry):

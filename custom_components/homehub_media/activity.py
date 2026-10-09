@@ -26,7 +26,8 @@ class ActivityManager:
     def _opt(self, section: str) -> dict:
         return self._hub.options.get(section) or {}
 
-    async def set(self, activity: str, force: bool = False) -> None:
+    async def set(self, activity: str, force: bool = False) -> bool:
+        """Run the switch; False when a newer request (or unload) superseded it."""
         switching = activity in (OPT_BOX, OPT_PC)
         if activity not in ACTIVITIES or (switching and not self._opt(activity)):
             raise ServiceValidationError(f"Activity {activity} is not available")
@@ -35,8 +36,10 @@ class ActivityManager:
         # mode: restart — the newest request cancels the running one; a superseded caller returns quietly
         task = self._task = self.hass.async_create_task(self._run(activity, force, self._task))
         await asyncio.wait([task])
-        if not task.cancelled():
-            task.result()
+        if task.cancelled():
+            return False
+        task.result()
+        return True
 
     async def async_shutdown(self) -> None:
         if self._task:
@@ -77,15 +80,15 @@ class ActivityManager:
             elif tv.available:
                 await self._try(tv.send_key("KEY_POWER"))
             return True
-        cold = not self._is_on()
+        cold = not self.is_on()
         box_on = [self._svc("remote", "turn_on", self._opt(OPT_BOX)["remote"])] if activity == "box" else []
         await asyncio.gather(self._power_on(), *box_on)
-        await self._until(self._is_on, POWER_WAIT_SECS)
+        await self._until(self.is_on, POWER_WAIT_SECS)
         if cold:
             await asyncio.sleep(SETTLE_SECS)
         if activity == "tv":
             await self._try(tv.send_key("KEY_HOME"))
-            ok = self._is_on()
+            ok = self.is_on()
         else:
             ok = await self._switch(self._opt(activity)["input"], 4 if force else 3 if cold else 2, force)
         await self.apply_volume()
@@ -122,7 +125,7 @@ class ActivityManager:
         self.phase = phase
         self._hub.async_notify()
 
-    def _is_on(self) -> bool:
+    def is_on(self) -> bool:
         st = self.hass.states.get(self._opt(OPT_TV).get("entity") or "")  # a configured entity is the truth
         return st.state not in OFF_STATES if st else self._hub.tv.available
 

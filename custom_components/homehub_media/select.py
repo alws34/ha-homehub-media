@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
+from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import OPT_BOX, OPT_PC
 from .entity import HomeHubEntity
 
 
@@ -22,19 +22,23 @@ class AmbienceModeSelect(HomeHubEntity, SelectEntity):
         return self.hub.ambience.mode
 
     async def async_select_option(self, option: str) -> None:
-        self._touch()
-        await (self.hub.ambience.stop() if option == "off" else self.hub.ambience.start(option))
+        await self.hub.command(self.hub.ambience.stop() if option == "off" else self.hub.ambience.start(option))
 
 
-class ActivitySelect(HomeHubEntity, SelectEntity):
+class ActivitySelect(HomeHubEntity, SelectEntity, RestoreEntity):
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # the state only: re-running the activity after a restart would switch inputs and volume
+        if (last := await self.async_get_last_state()) and last.state in self.options:
+            self.hub.activity.current = last.state
+
     @property
     def options(self) -> list[str]:
-        return ["off", "tv", *(a for a in (OPT_BOX, OPT_PC) if self.hub.options.get(a))]  # as Hub.snapshot()
+        return self.hub.activities
 
     @property
     def current_option(self) -> str:
         return self.hub.activity.current
 
     async def async_select_option(self, option: str) -> None:
-        self._touch()
-        await self.hub.activity.set(option)
+        await self.hub.command(self.hub.activity.set(option))

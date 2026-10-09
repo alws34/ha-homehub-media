@@ -28,7 +28,7 @@ async def test_tool_call_then_answer(hass, setup_entry, agent, monkeypatch):
     replies = [assistant.Reply("", [("c1", "AmbienceStart", {"mode": "dinner"})]), assistant.Reply("Dinner is on.")]
     seen = []
 
-    async def complete(hass, cfg, system, messages, tools):
+    async def complete(hass, cfg, system, messages, tools, final):
         seen.append(messages)
         assert cfg["provider"] == "claude" and "HomeHub" in system and any(t["name"] == "AmbienceStart" for t in tools)
         return replies.pop(0)
@@ -49,7 +49,7 @@ async def test_tool_errors_reach_the_model(hass, setup_entry, agent, monkeypatch
                assistant.Reply("Sorry.")]
     seen = []
 
-    async def complete(hass, cfg, system, messages, tools):
+    async def complete(hass, cfg, system, messages, tools, final):
         seen.append(messages)
         return replies.pop(0)
 
@@ -65,20 +65,20 @@ async def test_tool_errors_reach_the_model(hass, setup_entry, agent, monkeypatch
 async def test_rounds_capped(hass, setup_entry, agent, monkeypatch):
     calls = []
 
-    async def complete(hass, cfg, system, messages, tools):
-        calls.append(1)
+    async def complete(hass, cfg, system, messages, tools, final):
+        calls.append(final)
         return assistant.Reply("", [(f"c{len(calls)}", "NowPlaying", {})])
 
     monkeypatch.setattr(assistant, "complete", complete)
     result = await conversation.async_converse(hass, "loop", None, Context(), agent_id=agent)
-    assert len(calls) == MAX_ROUNDS
+    assert calls == [False] * (MAX_ROUNDS - 1) + [True]  # the last round must answer in text
     assert result.response.response_type is intent.IntentResponseType.ERROR
 
 
 @pytest.mark.parametrize(("code", "speech"), [("invalid_auth", "The assistant's API key was rejected."),
                                               ("cannot_connect", "I can't reach the assistant right now.")])
 async def test_provider_error(hass, setup_entry, agent, monkeypatch, code, speech):
-    async def complete(*args):
+    async def complete(*args, **kwargs):
         raise HomeAssistantError(code)
 
     monkeypatch.setattr(assistant, "complete", complete)
