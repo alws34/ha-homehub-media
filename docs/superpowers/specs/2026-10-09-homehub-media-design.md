@@ -25,11 +25,13 @@ custom_components/homehub_media/   # what HACS installs
   ambience.py      # catalog, modes store, favourites, lighting, playback orchestration
   library.py       # Plex / Jellyfin continue-watching + recently-added
   activity.py      # Off / TV apps / streaming box / media PC state machine, quiet volume
-  select.py switch.py
+  assistant.py     # llm.API tools + provider adapters (Ollama / OpenAI / Claude)
+  select.py switch.py sensor.py conversation.py
   www/homehub-media-card.js   www/ambience.html
   brand/icon.png …   translations/en.json
 media-pc/                          # NOT installed by HACS; original author's Ubuntu side
   ambient-player/  media-hub-coordinator/  systemd-user/
+blueprints/automation/homehub_media/
 docs/  README.md  LICENSE (MIT)  hacs.json  .github/workflows/validate.yml
 ```
 
@@ -56,6 +58,8 @@ Options flow (menu), every section optional:
 | Ambience | player backend: **TV browser** or **Media PC**; radio streams (HTTPS only) for TV backend |
 | Modes | per mode: name, icon, scene (none = no lighting), flicker lights (none = no flicker), lights-only flag |
 | Volume | normal %, quiet %, optional block entity (e.g. night-mode boolean that blocks everything but Off) |
+| Dayparts | morning/afternoon/evening/night start times → mode; idle auto-start minutes |
+| Assistant | provider (Ollama / OpenAI / Claude), URL or API key, model (live list) |
 
 ## Components
 
@@ -111,15 +115,57 @@ The "stop ambience before opening a browser client" step moves from the coordina
 which removes the coordinator's `ambient_stop_url` and fixes the original loopback-vs-LAN-bind bug.
 `keyboard.py`: ESP32 `/type`, `/key` with `X-HomeHub-Key` (cleartext; documented limitation).
 
+### Sleep timer (feature 2)
+`ambience_sleep_timer(minutes | 0 to cancel)`: at expiry fades both layers' volume to 0 over 60 s
+(TV page: client-side ramp; PC: `PATCH /v2/state` steps), then runs the normal mode stop (media stop, flicker
+cancel, light restore). Exposed as `sensor.homehub_ambience_sleep_timer` (device_class `timestamp`, the end time)
+and timer chips (15/30/60/90) in the Ambience tab.
+
+### Now Playing strip (feature 3)
+Library pollers also read active sessions (Plex `/status/sessions`, Jellyfin `/Sessions`) every 10 s while any
+server is configured; optional "player name contains" filter (default: all sessions of the configured user).
+The card shows artwork, title, progress and play/pause/±30 s. Controls send TV keys (`KEY_PLAY`/`KEY_PAUSE`/
+`KEY_FF`/`KEY_REWIND`), which work in any app, so no per-client remote-control protocol is needed.
+Also exposed as `sensor.homehub_now_playing` (state = title, attributes = server, progress, image).
+
+### Time-of-day ambience (feature 4)
+Options: daypart start times (morning / afternoon / evening / night) → mode per daypart, and an
+"auto-start when idle" switch with N minutes. `homehub_media.ambience_auto` starts the current daypart's mode
+(the card's **Auto** tile calls it). Idle auto-start triggers only when a current-app entity is configured and
+reports the TV on the home screen / no app for N minutes; otherwise auto-start is available via the service only.
+Entity: `switch.homehub_auto_ambience`.
+
+### Blueprints (feature 5)
+`blueprints/automation/homehub_media/`: *stop ambience when the TV switches to an app or input*,
+*quiet mode on a schedule*, *start daypart ambience at sunset when the TV is off*. README import badges
+(`my.home-assistant.io/redirect/blueprint_import`).
+
+### Voice / AI assistant
+- Options section **Assistant**: provider **Ollama** (base URL, no key), **OpenAI** (API key), or **Claude**
+  (Anthropic API key); model dropdown filled live from the provider (Ollama `/api/tags`, OpenAI `models.list`,
+  Anthropic `models.list`); key validated in the flow. Claude default model `claude-opus-5-5`.
+- Tools are defined once as an `llm.API` ("HomeHub Media"): launch_app, send_key, set_activity,
+  ambience_start/stop/auto, sleep_timer, set_quiet_mode, play_library_item (search by title), now_playing.
+  Registering the API also lets the core Ollama/OpenAI/Anthropic conversation agents use these tools.
+- `conversation.homehub_assistant` entity: selectable in Settings → Voice assistants. It runs a minimal
+  non-streaming tool loop (max 5 rounds) against the chosen provider, using the official SDKs already shipped
+  with HA's core integrations (`anthropic`, `openai`; Ollama via its OpenAI-compatible `/v1` endpoint).
+  Claude: `output_config.effort: "low"` for snappy voice replies, `tool_choice: auto`, server-side fallback
+  (`fallbacks: "default"`), `stop_reason == "refusal"` handled with a spoken apology.
+- Least privilege: the tools control only HomeHub; library titles passed to the model are data, and every tool
+  call goes through the same validated service handlers as the card.
+
 ### Services
 `homehub_media.` `send_key`, `launch_app`, `restart_app`, `send_text`, `pointer`, `set_activity`,
-`ambience_start`, `ambience_stop`, `ambience_update`, `save_mode`, `set_favorite`, `play_library_item`,
-`pc_open`, `pc_command`. All registered in `async_setup`, vol schemas with bounds, `ServiceValidationError`
+`ambience_start`, `ambience_stop`, `ambience_update`, `ambience_auto`, `ambience_sleep_timer`, `save_mode`,
+`set_favorite`, `play_library_item`, `pc_open`, `pc_command`. All registered in `async_setup`, vol schemas with bounds, `ServiceValidationError`
 on bad input. Websocket commands for the card: `homehub_media/state` (subscribe), `homehub_media/catalog`,
 `homehub_media/library`.
 
 ### Entities
-`select.homehub_ambience_mode` (Off + modes), `select.homehub_activity`, `switch.homehub_quiet_mode`.
+`select.homehub_ambience_mode` (Off + modes), `select.homehub_activity`, `switch.homehub_quiet_mode`,
+`switch.homehub_auto_ambience`, `sensor.homehub_ambience_sleep_timer`, `sensor.homehub_now_playing`,
+`conversation.homehub_assistant` (when an assistant provider is configured).
 Everything else that was an input_* helper becomes internal state or card-local UI state.
 
 ### Card (`homehub-media-card`)
@@ -132,6 +178,8 @@ Single vanilla web component, no build step, no third-party card dependencies, H
 - **Ambience:** mode tiles (ON state), editor with visual/soundtrack carousels (previews, favourites, swipe),
   mix slider, loops/random toggles, save.
 - **Library:** Continue Watching / Recently Added rows per server.
+- **Now Playing strip** above the tabs whenever a Plex/Jellyfin session is active; **Auto** tile and sleep-timer
+  chips in the Ambience tab.
 - **Drawer mode:** fixed right-edge slide-out with handle, like the original.
 All rendered text escaped; DOM updated only when relevant state changes.
 
@@ -166,7 +214,8 @@ card shows an inline banner. Pairing denied → config flow error `pairing_denie
 ## Testing
 
 - `tests/` with `pytest-homeassistant-custom-component`: config/options flow, services schema validation,
-  ambience catalog id rules, activity state machine, mode start/stop snapshot ordering.
+  ambience catalog id rules, activity state machine, mode start/stop snapshot ordering, sleep-timer fade,
+  daypart selection, assistant tool loop against a stubbed provider for each of the three adapters.
 - `media-pc/` stdlib `unittest`: auth (token, Host, Content-Type, allowlist) for both daemons.
 - Card: a small node test for pure helpers (escaping, id → title).
 - Live: HACS custom-repo install on the owner's HA, then an on-TV session (pairing, keys, apps, text,
