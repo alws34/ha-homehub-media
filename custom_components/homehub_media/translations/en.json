@@ -235,7 +235,7 @@
         },
         "data_description": {
           "backend": "The media PC is offered once it is set up.",
-          "radio": "One station per line as id=https://url, for example jazz=https://example.com/stream. IDs use lowercase letters, digits, - and _."
+          "radio": "One station per line as id=stream address, for example jazz=(the station's HTTPS stream address). Only HTTPS addresses are accepted. IDs use lowercase letters, digits, - and _."
         }
       },
       "modes": {
