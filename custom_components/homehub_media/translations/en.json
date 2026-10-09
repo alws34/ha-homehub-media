@@ -274,12 +274,12 @@
         "data": {
           "normal": "Normal volume",
           "quiet": "Quiet volume",
-          "block_entity": "Block volume changes"
+          "block_entity": "Block entity"
         },
         "data_description": {
           "normal": "TV volume when an activity starts.",
           "quiet": "TV volume while quiet mode is on.",
-          "block_entity": "Optional. While this entity is on, HomeHub leaves the volume alone."
+          "block_entity": "Optional, for example a night-mode switch. While it is on, only Off can be selected."
         }
       },
       "dayparts": {
@@ -568,7 +568,7 @@
         },
         "force": {
           "name": "Force",
-          "description": "Switch inputs again even if the activity is already active."
+          "description": "Recovery mode: retry the input switch more times (up to 4) and verify it, even if the activity is already active."
         }
       }
     },
