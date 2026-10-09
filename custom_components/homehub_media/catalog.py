@@ -36,19 +36,28 @@ def _usable(path: Path, base: Path) -> bool:
 
 
 def scan(root: Path, kind: str) -> list[dict]:
+    # ponytail: ids derive from sorted filenames, so adding a same-stem file can shift ids (rain -> rain_2);
+    # upgrade path = persist a path -> id map.
     exts, base, used, items = _EXT[kind], root.resolve(), set(), []
-    for path in sorted(root.rglob("*"), key=lambda p: p.relative_to(root).as_posix().lower()):
+    paths = sorted(root.rglob("*"), key=lambda p: p.relative_to(root).as_posix().lower())
+    pics: dict[Path, list[Path]] = {}  # previews keyed by extension-less path
+    for p in paths:
+        if p.suffix.lower() in PREVIEW_EXT:
+            pics.setdefault(p.with_suffix(""), []).append(p)
+    for path in paths:
+        rel = path.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts):  # hidden files/dirs, e.g. macOS "._Rain.mp4"
+            continue
         if path.suffix.lower() not in exts or not _usable(path, base):
             continue
-        rel = path.relative_to(root)
         slug = media_id = slugify(path.stem)
         n = 2
         while media_id in used:
             suffix = f"_{n}"
             media_id, n = f"{slug[:64 - len(suffix)]}{suffix}", n + 1
         used.add(media_id)
-        previews = (e for e in PREVIEW_EXT if _usable(path.with_suffix(e), base))
-        preview = next((rel.with_suffix(e).as_posix() for e in previews), None)
+        sides = sorted(pics.get(path.with_suffix(""), []), key=lambda p: PREVIEW_EXT.index(p.suffix.lower()))
+        preview = next((p.relative_to(root).as_posix() for p in sides if _usable(p, base)), None)
         items.append({
             "id": media_id, "kind": kind, "title": title_from_stem(path.stem), "source_type": "file",
             "live": False, "duration": None, "path": rel.as_posix(), "preview_path": preview,
@@ -69,28 +78,35 @@ def radio_items(streams: dict[str, str]) -> list[dict]:
             label = f"{label[6:]} live"
         items.append({
             "id": media_id, "kind": "soundtrack", "title": label.title(), "source_type": "stream",
-            "live": True, "duration": None, "url": url,  # url: server-side only, like "path"
+            "live": True, "duration": None, "url": u.geturl(),  # normalised; server-side only, like "path"
         })
     return items
 
 
 def validate_composition(data: dict, partial: bool = False) -> dict:
-    if not isinstance(data, dict):
-        raise ValueError("composition must be an object")  # noqa: TRY004 - callers catch ValueError only
-    if unknown := set(data) - _DEFAULTS.keys() - {"visual_enabled"}:
-        raise ValueError(f"unknown composition keys: {sorted(map(str, unknown))}")
+    """Strictly validate a composition; raises ValueError.
+
+    partial=True checks only the given keys and skips the cross-field rule "visual_enabled requires a
+    visual", so callers must fully re-validate the merged composition (partial=False) before using it.
+    """
+    if not isinstance(data, dict) or set(data) - _DEFAULTS.keys() - {"visual_enabled"}:
+        raise ValueError("composition must be an object with known keys")
+    comp = {}
     for key, value in data.items():
         if key in _IDS:
             ok = value is None or (isinstance(value, str) and ID_RE.fullmatch(value) is not None)
         elif key in _VOLUMES:
-            ok = type(value) is int and 0 <= value <= 100
+            # bool is an int; NaN fails the range check
+            ok = isinstance(value, int | float) and not isinstance(value, bool) and 0 <= value <= 100
+            value = round(value) if ok else value
         else:
             ok = type(value) is bool
         if not ok:
             raise ValueError(f"invalid value for {key}")
+        comp[key] = value
     if partial:
-        return dict(data)
-    comp = {**_DEFAULTS, **data}
+        return comp
+    comp = {**_DEFAULTS, **comp}
     comp.setdefault("visual_enabled", comp["visual"] is not None)
     if comp["visual_enabled"] and comp["visual"] is None:
         raise ValueError("visual_enabled requires a visual")
