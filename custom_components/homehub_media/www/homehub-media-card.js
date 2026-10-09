@@ -7,6 +7,8 @@
 const TAG = "homehub-media-card";
 const DOMAIN = "homehub_media";
 const DRAWER_KEY = "homehub-media-card:drawer";
+const PAD_KEY = "homehub-media-card:pad";  // "touchpad" or "dpad", per browser
+const SWIPE_STEP = 48;  // px of swipe per arrow key on a TV without pointer input
 const TABS = {
   remote: ["Remote", "mdi:remote-tv"],
   ambience: ["Ambience", "mdi:weather-night"],
@@ -44,6 +46,9 @@ const toggleIn = (list, id) => {
   return l.length < VISUALS_MAX ? [...l, id] : l;
 };
 const randomLabel = (comp) => (comp?.visuals?.length >= 2 ? `Random from ${comp.visuals.length} videos` : "");
+// the TV volume is known only with the TV media player, which set_volume needs: no level, no slider
+const volumeSlider = (level) => (level == null ? ""
+  : `${icon("mdi:volume-medium")}<input type="range" min="0" max="100" step="1" data-volume aria-label="TV volume">`);
 const ARROWS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
 
 const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -106,6 +111,9 @@ class HomeHubMediaCard extends HTMLElement {
     this._sc = 0;
     this._channel = "";
     this._noClickUntil = 0;
+    this._arrows = [];  // swipe-mode arrow keys waiting for the one request in flight
+    this._touchpad = false;
+    try { this._touchpad = localStorage.getItem(PAD_KEY) === "touchpad"; } catch { /* storage blocked: D-pad */ }
     this._stopHoldB = () => this._stopHold();
     const r = this.shadowRoot;
     r.addEventListener("click", (e) => this._onClick(e));
@@ -459,14 +467,14 @@ class HomeHubMediaCard extends HTMLElement {
     const canTouch = t !== "box";
     const tp = this._touchpad && canTouch;
     this._sec("pad", [tp, t === "pc", avail.length > 1], () => (tp ? this._touchHtml(t === "pc") : this._dpadHtml(avail.length > 1)));
-    this._sec("padhint", [tp && t === "tv" && !s.tv?.pointer_active], () => (
-      tp && t === "tv" && !s.tv?.pointer_active ? hint("Pointer works in the browser") : ""));
+    const padHint = tp && t === "tv"
+      ? (s.tv?.pointer_active ? "Pointer mode: drag to move · tap to click" : "Swipe to move · tap for OK") : "";
+    this._sec("padhint", [padHint], () => (padHint ? hint(padHint, "mdi:gesture-swipe") : ""));
     this._sec("ctl", [!!s.tv?.muted, tp, canTouch], () => this._ctlHtml(!!s.tv?.muted, tp, canTouch));
     const vol = this.shadowRoot.querySelector("[data-vol]");
     if (vol) vol.textContent = s.tv?.volume ?? "–";
-    const level = s.tv?.volume;  // known only with the TV media player, which set_volume needs
-    this._sec("vol", [level != null], () => (level == null ? ""
-      : `${icon("mdi:volume-medium")}<input type="range" min="0" max="100" step="1" data-volume aria-label="TV volume">`));
+    const level = s.tv?.volume;
+    this._sec("vol", [level != null], () => volumeSlider(level));
     const slider = this.shadowRoot.querySelector("[data-volume]");
     if (slider && level != null && !this._volTimer && Date.now() - (this._volAt || 0) > 1500) {  // never fight a drag
       slider.value = level;
@@ -502,8 +510,9 @@ class HomeHubMediaCard extends HTMLElement {
   }
 
   _touchHtml(pc) {
-    return `<div class="touch" data-touch role="application" aria-label="Touchpad: drag to move the pointer, tap to click">
-        ${icon("mdi:gesture-tap")}<span>Drag to move · tap to click${pc ? " · two fingers to scroll" : ""}</span>
+    return `<div class="touch" data-touch role="application" aria-label="${pc ? "Touchpad: drag to move the pointer, tap to click"
+      : "Touchpad: swipe for the arrow keys and tap for OK, or move the pointer where the TV allows it"}">
+        ${icon("mdi:gesture-tap")}<span>${pc ? "Drag to move · tap to click · two fingers to scroll" : "Swipe or tap here"}</span>
       </div>
       <div class="clicks">
         <button class="btn" data-a="click" data-v="click">Click</button>
@@ -580,6 +589,34 @@ class HomeHubMediaCard extends HTMLElement {
     this._pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (this._pointers.size === 1) this._tap = { t: performance.now(), dist: 0 };
     else { this._tap = null; this._lastY = null; }
+    this._sw = { x: 0, y: 0 };
+  }
+
+  // a TV without pointer input (outside its browser): the touchpad swipes the arrow keys and taps OK
+  _swipeMode() {
+    return this._eff() === "tv" && !this._snap?.tv?.pointer_active;
+  }
+
+  _swipeArrows(dx, dy) {
+    const a = this._sw;
+    a.x += dx;
+    a.y += dy;
+    const horiz = Math.abs(a.x) >= Math.abs(a.y);
+    const d = horiz ? a.x : a.y;
+    const steps = Math.trunc(Math.abs(d) / SWIPE_STEP);
+    if (!steps) return;
+    this._sw = { x: 0, y: 0 };
+    const dir = horiz ? (d > 0 ? "right" : "left") : (d > 0 ? "down" : "up");
+    for (let i = 0; i < steps; i++) this._arrows.push(dir);
+    this._pumpArrows();
+  }
+
+  _pumpArrows() {
+    if (this._arrowBusy || !this._arrows.length) return;  // one request in flight; the rest wait their turn
+    this._arrowBusy = this._remote(this._arrows.shift(), "tv").finally(() => {
+      this._arrowBusy = null;
+      this._pumpArrows();
+    });
   }
 
   _tpMove(e) {
@@ -599,7 +636,8 @@ class HomeHubMediaCard extends HTMLElement {
       this._lastY = y;
       return;
     }
-    this._queueMove(dx * 1.15, dy * 1.15);
+    if (this._swipeMode()) this._swipeArrows(dx, dy);
+    else this._queueMove(dx * 1.15, dy * 1.15);
   }
 
   _tpUp(e) {
@@ -661,9 +699,10 @@ class HomeHubMediaCard extends HTMLElement {
   }
 
   async _click(action) {
+    if (this._swipeMode()) return this._remote("select", "tv");  // no pointer: a tap is OK
     // the pointer must arrive before the click does
     await this._flushPendingMove();
-    this._pointer(action);
+    return this._pointer(action);
   }
 
   // ---------- ambience tab ----------
@@ -921,7 +960,11 @@ class HomeHubMediaCard extends HTMLElement {
       case "target": return this._setTarget(v);
       case "remote": return this._remote(v);
       case "np": return this._call("remote", { command: v });
-      case "touchpad": this._touchpad = !this._touchpad; return this._render();
+      case "touchpad": {
+        this._touchpad = !this._touchpad;
+        try { localStorage.setItem(PAD_KEY, this._touchpad ? "touchpad" : "dpad"); } catch { /* storage blocked */ }
+        return this._render();
+      }
       case "click": return this._click(v);
       case "app": return this._call("launch_app", { app: v });
       case "kclear": {
@@ -1432,4 +1475,4 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === TAG)) {
   window.customCards.push({ type: TAG, name: "HomeHub Media", description: "Remote, ambience and library", preview: true });
 }
-if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel };
+if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider };

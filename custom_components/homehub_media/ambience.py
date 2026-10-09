@@ -20,6 +20,7 @@ from homeassistant.util import dt as dt_util
 
 from . import catalog as cat
 from .const import (
+    APP_CATALOG,
     DEFAULT_DAYPARTS,
     DEFAULT_MODES,
     MEDIA_ROOT,
@@ -160,8 +161,8 @@ class AmbienceManager:
                                     if os.path.isfile(self.hass.config.path("www", "Ambience", item["id"] + ext))),
                                    None)
 
-    async def refresh_catalog(self) -> None:
-        amb = self._hub.options.get(OPT_AMBIENCE) or {}
+    async def _scan(self, amb: dict) -> dict:
+        """The backend's files (and radio stations)."""
         if self._backend == "pc":
             await self._hub.pc_ambient.refresh()  # rescan the PC's disk
             data = await self._hub.pc_ambient.catalog()
@@ -172,25 +173,37 @@ class AmbienceManager:
                            if isinstance(i, dict) and isinstance(i.get("id"), str) and cat.ID_RE.fullmatch(i["id"])]
                      for key in ("visuals", "soundtracks")}
             await self.hass.async_add_executor_job(self._add_pc_previews, found["visuals"] + found["soundtracks"])
-        else:
-            try:
-                radio = cat.radio_items(amb.get("radio") or {})
-                found = await self.hass.async_add_executor_job(self._scan_tv)
-            except ValueError as err:
-                raise ServiceValidationError(str(err)) from err
-            except OSError as err:
-                raise HomeAssistantError("Cannot read the ambience media folder") from err
-            found["soundtracks"] += [{**r, "preview": None} for r in radio]
+            return found
+        try:
+            radio = cat.radio_items(amb.get("radio") or {})
+            found = await self.hass.async_add_executor_job(self._scan_tv)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        except OSError as err:
+            raise HomeAssistantError("Cannot read the ambience media folder") from err
+        found["soundtracks"] += [{**r, "preview": None} for r in radio]
+        return found
+
+    async def refresh_catalog(self) -> None:
+        """Rescan; YouTube videos need no scan, so they are offered even when the scan fails (which still raises)."""
+        amb, error = self._hub.options.get(OPT_AMBIENCE) or {}, None
+        try:
+            found = await self._scan(amb)
+        except HomeAssistantError as err:  # keep the files the last scan found
+            found = {k: [i for i in items if i.get("source_type") != "youtube"] for k, items in self._catalog.items()}
+            error = err
         try:  # YouTube plays in the TV's app whatever the backend
             found["visuals"] += cat.youtube_items(amb.get("youtube") or {}, {v["id"] for v in found["visuals"]})
         except ValueError as err:
-            raise ServiceValidationError(str(err)) from err
+            error = error or ServiceValidationError(str(err))
         for kind in _DIRS:
             favs = self._store.favorites(kind)
             for item in found[f"{kind}s"]:
                 item["favorite"] = item["id"] in favs
         self._catalog = found
         self._hub.async_notify()
+        if error:
+            raise error
 
     def catalog(self) -> dict:
         # ponytail: TV previews are unsigned /media/local/... paths; the ws handler signs them per caller (K5)
@@ -205,12 +218,18 @@ class AmbienceManager:
         return item.get("youtube_id") if item else None
 
     def _with_visual(self, comp: dict, shuffle: bool) -> dict:
-        """This run's visual: a random one of `visuals` (known ids first) when shuffling or `visual` is unset."""
+        """This run's visual: a random one of the `visuals` still in the catalog when shuffling or `visual` is
+        unset; else `visual` (no visual at all turns the layer off)."""
         if comp["visuals"] and (shuffle or comp["visual"] is None):
             known = {i["id"] for i in self._catalog["visuals"]}
-            pool = [v for v in comp["visuals"] if v in known] or comp["visuals"]
-            comp = {**comp, "visual": random.choice(pool)}
+            pool = [v for v in comp["visuals"] if v in known]
+            visual = random.choice(pool) if pool else comp["visual"]
+            comp = {**comp, "visual": visual, "visual_enabled": comp["visual_enabled"] and visual is not None}
         return comp
+
+    @property
+    def _youtube_app(self) -> str:
+        return self._hub.apps.get("youtube") or APP_CATALOG["youtube"]["ids"][0]
 
     async def start(self, mode_id: str, composition: dict | None = None, *, shuffle: bool = True) -> None:
         mode = self._mode(mode_id)
@@ -338,7 +357,7 @@ class AmbienceManager:
             yt, self._yt = self._yt, None
             try:
                 if yt:
-                    await self._hub.tv.stop_youtube()
+                    await self._hub.tv.stop_youtube(self._youtube_app)
                 elif self._backend == "pc":
                     await self._hub.pc_ambient.stop()
                 elif time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS:  # never HOME the user's app
@@ -401,9 +420,15 @@ class AmbienceManager:
     # ---- health, sleep timer, dayparts ------------------------------------------------------------
 
     async def _health(self, gen: int, _now: datetime) -> None:
-        if self._yt:  # the user left YouTube; "unknown" (TV unreachable) keeps the mode on, as for the PC
-            gone = (time.monotonic() - self._started > PAGE_GRACE_SECS
-                    and await self._hub.tv.youtube_state() == "stopped")
+        if self._yt:  # YouTube left the screen (HOME, another app: it keeps running hidden) or the TV went off
+            if time.monotonic() - self._started <= PAGE_GRACE_SECS:
+                return
+            try:  # an unavailable TV (the hub polls it every 30 s) counts as gone
+                info = await self._hub.tv.app_info(self._youtube_app) if self._hub.tv.available else None
+            except HomeAssistantError as err:  # one failed poll is no proof that the TV is off
+                _LOGGER.debug("YouTube status failed: %s", err)
+                return
+            gone = not (info or {}).get("visible")
         elif self._backend == "pc":
             try:
                 gone = (await self._hub.pc_ambient.status()).get("state") == "idle"

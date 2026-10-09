@@ -10,7 +10,7 @@ const ctx = { window: { __HOMEHUB_TEST__: true, customCards: [] }, customElement
               setTimeout, clearTimeout, performance };
 ctx.window.window = ctx.window;
 vm.createContext(ctx); vm.runInContext(src, ctx);
-const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel } = ctx.window.__homehubTest;
+const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider } = ctx.window.__homehubTest;
 const plain = (v) => JSON.parse(JSON.stringify(v));  // values from the card's realm, for deepStrictEqual
 
 test("esc neutralises markup", () => {
@@ -91,6 +91,61 @@ test("rotation chip toggles the browsed visual and goes live while the mode runs
   click();
   assert.deepEqual(plain(card._edit.draft.visuals), ["rain"]);
   card._flushLive(card._edit);
+});
+test("volume slider only when the TV volume is known (the TV media player)", () => {
+  assert.equal(volumeSlider(null), "");
+  assert.equal(volumeSlider(undefined), "");
+  assert.match(volumeSlider(0), /<input type="range"[^>]* data-volume/);
+});
+
+// drives the card's real touchpad handlers; every service call resolves at once
+const padCard = (pointerActive) => {
+  const calls = [];
+  const card = Object.assign(Object.create(Card.prototype), {
+    _snap: { tv: { pointer_active: pointerActive }, targets: {} }, _target: "tv", _pointers: new Map(),
+    _mv: { dx: 0, dy: 0 }, _sc: 0, _arrows: [], _call: (...a) => { calls.push(a); return Promise.resolve(true); },
+  });
+  const ev = (type, x, y = 0) => ({ type, pointerId: 1, isPrimary: true, clientX: x, clientY: y, preventDefault() {} });
+  const drag = (to, step = 10) => {
+    card._tpDown(ev("pointerdown", 0), { setPointerCapture() {} });
+    for (let x = step; x <= to; x += step) card._tpMove(ev("pointermove", x));
+    card._tpUp(ev("pointerup", to));
+  };
+  return { card, calls, drag };
+};
+const settle = () => new Promise((r) => setTimeout(r, 80));
+
+test("swipe mode: 100 px right presses right twice, one request at a time", async () => {
+  const { calls, drag } = padCard(false);
+  drag(100);
+  assert.equal(calls.length, 1);  // the second arrow waits for the first request
+  await settle();
+  assert.deepEqual(plain(calls), [["remote", { command: "right", target: "tv" }], ["remote", { command: "right", target: "tv" }]]);
+});
+test("swipe mode: a fast 3-step swipe in one move still sends 3 arrows; vertical goes up/down", async () => {
+  const { calls, drag } = padCard(false);
+  drag(150, 150);
+  await settle();
+  assert.equal(calls.filter(([, d]) => d.command === "right").length, 3);
+  const v = padCard(false);
+  v.card._tpDown({ pointerId: 1, isPrimary: true, clientX: 0, clientY: 0, preventDefault() {} }, {});
+  v.card._tpMove({ pointerId: 1, clientX: 5, clientY: -60, preventDefault() {} });
+  await settle();
+  assert.deepEqual(plain(v.calls), [["remote", { command: "up", target: "tv" }]]);
+});
+test("swipe mode: a tap is OK", async () => {
+  const { calls, drag } = padCard(false);
+  drag(0);
+  await settle();
+  assert.deepEqual(plain(calls), [["remote", { command: "select", target: "tv" }]]);
+});
+test("pointer mode (TV browser): drag moves and tap clicks, as before", async () => {
+  const { calls, drag } = padCard(true);
+  drag(30);
+  await settle();
+  drag(0);
+  await settle();
+  assert.deepEqual(plain(calls).map(([s, d]) => [s, d.action, d.target]), [["pointer", "move", "tv"], ["pointer", "click", "tv"]]);
 });
 test("volume slider sends one debounced set_volume", async () => {
   const calls = [];

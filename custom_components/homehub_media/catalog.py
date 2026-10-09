@@ -119,7 +119,8 @@ def youtube_items(entries: dict[str, str], taken: frozenset[str] | set[str] = fr
         if not isinstance(name, str) or not name.strip():
             raise ValueError("every YouTube video needs a name")
         vid = youtube_id(url)
-        media_id = _unique(slugify(name), used)
+        # a name without Latin letters (Hebrew, emoji) gets an id from its video, not an order-dependent media_2
+        media_id = _unique(slugify(name) if re.search(r"[A-Za-z]", name) else f"yt_{vid.lower()}", used)
         items.append({
             "id": media_id, "kind": "visual", "title": name.strip(), "source_type": "youtube", "live": False,
             "duration": None, "youtube_id": vid, "preview": f"/api/homehub_media/art/youtube/{vid}",

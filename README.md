@@ -168,7 +168,7 @@ Samsung TVs from 2021 on do not let Home Assistant open the ambience page in the
 2. In **YouTube videos**, enter one video per line as `Name=link`, for example `Star night=https://www.youtube.com/watch?v=B5unCXpegAw`. Watch, share (`youtu.be`), Shorts, and live links work, and so do `m.youtube.com` and `music.youtube.com` links and a bare 11-character video ID. Extra link parameters such as `&pp=` are ignored.
 3. Select **Submit**, then **Save and close**.
 
-The videos appear in the card's visual carousel in the order you entered them, with their YouTube thumbnail and a "YouTube" label. The name is the title, and the ID comes from the name the same way as for files (`Star night` becomes `star_night`). If a local file already has that ID, the video gets `_2`, and so on. Assign a video to a mode like any other visual.
+The videos appear in the card's visual carousel in the order you entered them, with their YouTube thumbnail and a "YouTube" label. The name is the title, and the ID comes from the name the same way as for files (`Star night` becomes `star_night`). A name without Latin letters, for example in Hebrew, gets `yt_` and the video ID in lowercase instead. If a local file already has that ID, the video gets `_2`, and so on. Assign a video to a mode like any other visual.
 
 **What happens on the TV**
 
@@ -183,7 +183,7 @@ Notes:
 
 - A YouTube video plays with its own sound. The mode's soundtrack, the mix, loop, and random-start settings are not used with a YouTube visual. Set the volume with the TV.
 - Without YouTube Premium, YouTube may show ads.
-- If you leave the YouTube app, HomeHub notices within about a minute and a half (it checks every 30 seconds, after a one-minute grace period), stops the mode, and restores the lights. Stopping the mode closes YouTube.
+- If YouTube leaves the screen (you press HOME, open another app, or turn the TV off), HomeHub notices within about a minute and a half (it checks every 30 seconds, after a one-minute grace period), stops the mode, and restores the lights. Stopping the mode closes YouTube.
 - The sleep timer does not fade a YouTube video. It stops it at the end time.
 - YouTube videos also work when ambience plays on the media PC. A YouTube mode then switches to Samsung TV, and a local-file mode switches back to the media PC.
 - DIAL must be on. It is on by default on Samsung TVs.
@@ -320,16 +320,16 @@ Titles and session names from Plex and Jellyfin reach the language model as untr
 
 These come from the TV, not from HomeHub.
 
-- **Pointer**: the touchpad works only where Samsung enables pointer input, such as the built-in Browser and some apps. On the TV, only move and click are available. Scroll and right-click work on the media PC only.
+- **Pointer**: the TV accepts pointer input only where Samsung enables it, such as the built-in Browser and some apps. There the card's touchpad moves the pointer and a tap clicks. Everywhere else on the TV the touchpad works as a swipe pad: every 48 pixels of swipe press an arrow key in the swipe's main direction, and a tap presses OK. The hint under the touchpad shows which mode is active, and the card remembers per browser whether you last used the D-pad or the touchpad. On the TV, only move and click are available. Scroll and right-click work on the media PC only.
 - **Typing**: text goes to a text field that has focus on the TV. Focus a search box on the TV first. Without a focused field, HomeHub types through the ESP32 keyboard bridge if you set one up. Backspace and clear also need the keyboard bridge.
 - **Deep links**: opening a specific Netflix or Disney+ title is not reliable and is not supported. Use the Plex or Jellyfin library to play a title.
 - **App IDs**: the TV cannot list its apps on 2020 and newer models, so HomeHub tries a list of known IDs for each app. IDs vary by region and year. Some built-in IDs were checked on one Samsung QE55Q60B, and others may differ on your TV. If an app is missing or opens the wrong app, use **Streaming apps** to rescan or set the ID.
 - **Plex and Jellyfin apps**: if the Plex or Jellyfin app is not installed on the TV, HomeHub opens that server's URL from **Plex and Jellyfin** in the TV browser instead.
 - **Playing a library title**: HomeHub opens the app, then waits up to 15 seconds for it to accept remote play. Plex plays through a media player from the core Plex integration. If you have more than one Plex player, set the player name filter so HomeHub picks the TV. Jellyfin plays on the configured user's most recently active session that supports remote control and matches the player name filter.
 - **Play and pause**: the remote's play/pause button sends play or pause to the TV and tracks the last key it sent, not the real player state. If playback changes without HomeHub, for example with the TV remote, the next press can do the wrong thing. The Now Playing strip uses the session's real state.
-- **Browser player on 2021 and newer TVs**: Samsung TVs from 2021 on (Tizen 6.5 and newer, checked on a QE55Q60B) start the browser hidden when Home Assistant asks them to open a page, and they also refuse DLNA playback from Home Assistant. Local video and soundtrack files therefore cannot play on these TVs when ambience plays on the Samsung TV, and starting such a mode fails with "This TV does not allow opening web pages remotely". Use [YouTube ambience](#youtube-ambience) or play ambience on a media PC. Lights-only modes are not affected. For the same reason, a Plex or Jellyfin server URL cannot open in the browser on these TVs. Older TVs open the page as before.
-- **App launches**: HomeHub opens apps through the TV's REST interface, which answers at once. Only when that fails does it send the launch over the remote connection, without waiting for a reply, because the TV never sends one.
-- **Remote connection while the browser is open**: the TV can send pointer events before it accepts the remote connection. HomeHub then retries the connection up to 5 times, so the first button press can take a few seconds.
+- **Browser player on 2021 and newer TVs**: Samsung TVs from 2021 on (Tizen 6.5 and newer, checked on a QE55Q60B) start the browser hidden when Home Assistant asks them to open a page. Local video and soundtrack files therefore cannot play on these TVs when ambience plays on the Samsung TV, and starting such a mode fails with "This TV does not allow opening web pages remotely". Use [YouTube ambience](#youtube-ambience) or play ambience on a media PC. Lights-only modes are not affected. For the same reason, a Plex or Jellyfin server URL cannot open in the browser on these TVs.
+- **App launches**: HomeHub opens apps through the TV's REST interface, which answers at once. If the TV says the app is not installed, the launch fails with "… is not installed on the TV". Only when the REST interface itself fails does HomeHub send the launch over the remote connection, without waiting for a reply, because the TV never sends one.
+- **Remote connection while the browser is open**: the TV can send pointer events before it accepts the remote connection. HomeHub ignores them while connecting, so button presses still work.
 - **Autoplay**: when TV ambience starts in the browser, HomeHub presses OK on the TV about 4 seconds later, so the browser allows sound. If the sound stays muted, press OK on the TV remote.
 - **Ambience page closed**: if the TV's ambience page stops checking in with Home Assistant, for example because the browser was closed or the TV turned off, HomeHub stops the mode within about a minute and restores the lights.
 
