@@ -10,7 +10,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
-from custom_components.homehub_media.library import InvalidAuth, JellyfinServer, Library, PlexServer
+from custom_components.homehub_media.library import ART_MAX, InvalidAuth, JellyfinServer, Library, PlexServer
 
 PLEX = "http://plex.local:32400"
 JF = "http://jf.local:8096"
@@ -147,6 +147,21 @@ async def test_plex_play_via_core_entity(hass, aioclient_mock):
     assert len(calls) == 1
 
 
+async def test_plex_play_without_filter_prefers_a_tv(hass, aioclient_mock):
+    reg = er.async_get(hass)
+    phone = reg.async_get_or_create("media_player", "plex", "p", suggested_object_id="plex_pixel")
+    tv = reg.async_get_or_create("media_player", "plex", "t", suggested_object_id="plex_lounge")
+    hass.states.async_set(phone.entity_id, "idle", {"friendly_name": "Pixel"})
+    hass.states.async_set(tv.entity_id, "idle", {"friendly_name": "Samsung QE55"})
+    aioclient_mock.get(f"{PLEX}/identity", json={"MediaContainer": {"machineIdentifier": "m"}})
+    calls = async_mock_service(hass, "media_player", "play_media")
+    assert await PlexServer(hass, PLEX, "tok", None).play("123") is True
+    assert calls[0].data["entity_id"] == tv.entity_id
+    hass.states.async_set(tv.entity_id, "idle", {"friendly_name": "iPad"})  # two players, neither a TV
+    assert await PlexServer(hass, PLEX, "tok", None).play("123") is False
+    assert len(calls) == 1
+
+
 async def test_plex_play_service_failure_returns_false(hass, aioclient_mock):
     ent = er.async_get(hass).async_get_or_create("media_player", "plex", "uid1")
     hass.states.async_set(ent.entity_id, "idle")
@@ -158,6 +173,22 @@ async def test_jellyfin_art_proxy(hass, aioclient_mock):
     aioclient_mock.get(f"{JF}/Items/abc/Images/Primary", content=b"\xff\xd8img", headers=JPEG)
     assert await JellyfinServer(hass, JF, "key", "u1", None).fetch_art("abc") == (b"\xff\xd8img", "image/jpeg")
     assert aioclient_mock.mock_calls[0][1].query["maxHeight"] == "450"
+
+
+@pytest.mark.parametrize(("headers", "content"), [
+    ({**JPEG, "Content-Length": str(ART_MAX + 1)}, b"img"),  # refused from the header, before reading
+    (JPEG, b"\0" * (ART_MAX + 1)),  # no length: the chunked read stops past the cap
+])
+async def test_art_size_is_capped(hass, aioclient_mock, headers, content):
+    aioclient_mock.get(f"{JF}/Items/abc/Images/Primary", content=content, headers=headers)
+    with pytest.raises(HomeAssistantError, match="too large"):
+        await JellyfinServer(hass, JF, "key", "u1", None).fetch_art("abc")
+
+
+async def test_jellyfin_item_with_invalid_id_has_no_image(hass, aioclient_mock):
+    aioclient_mock.get(f"{JF}/Items/Latest", json=[{"Id": "../x", "Name": "A"}, {"Id": "m1", "Name": "B"}])
+    assert [i["image"] for i in await JellyfinServer(hass, JF, "key", "u1", None).recently_added()] == [
+        None, "/api/homehub_media/art/jellyfin/m1"]
 
 
 def _key(path: bytes) -> str:

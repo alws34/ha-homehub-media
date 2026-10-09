@@ -7,7 +7,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -21,6 +21,7 @@ TIMEOUT = aiohttp.ClientTimeout(total=10)
 ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
 PLEX_PATH_RE = re.compile(r"/library/metadata/\d+/(?:thumb|art)/\d+", re.ASCII)  # the only paths art keys may reach
 ART = "/api/homehub_media/art"
+ART_MAX = 5 * 1024 * 1024  # bytes of one proxied image
 TICKS = 10_000_000  # Jellyfin ticks per second
 # request failures plus malformed server payloads; messages never contain credentials
 FAILURES = (HomeAssistantError, LookupError, TypeError, AttributeError, ValueError)
@@ -65,10 +66,19 @@ class _Server:
                 method, self._url + path, params=params, headers={**self._headers, "Accept": accept}, timeout=TIMEOUT
             ) as resp:
                 resp.raise_for_status()
-                if accept.startswith("image/") and not resp.content_type.startswith("image/"):
-                    # checked before reading the body: never buffer or relay non-images through HA's origin
+                if not accept.startswith("image/"):
+                    return await resp.read(), resp.content_type
+                # checked before reading the body: never buffer or relay non-images through HA's origin
+                if not resp.content_type.startswith("image/"):
                     raise HomeAssistantError(f"{self.name} {path}: not an image")
-                return await resp.read(), resp.content_type
+                if int(resp.headers.get("Content-Length") or 0) > ART_MAX:
+                    raise HomeAssistantError(f"{self.name} {path}: image too large")
+                body = bytearray()
+                async for chunk in resp.content.iter_chunked(65536):  # memory stays bounded without a length
+                    body += chunk
+                    if len(body) > ART_MAX:
+                        raise HomeAssistantError(f"{self.name} {path}: image too large")
+                return bytes(body), resp.content_type
         except (aiohttp.ClientError, TimeoutError) as err:
             status = getattr(err, "status", None)
             raise (InvalidAuth if status in (401, 403) else HomeAssistantError)(
@@ -110,7 +120,8 @@ class PlexServer(_Server):
 
     async def sessions(self) -> list[dict]:
         out = []
-        # ponytail: not filtered by user (owner token is usually one user); filter on m["User"]["id"] if a server is shared
+        # ponytail: not filtered by user: the owner's User.id here (local "1" or the plex.tv id) is unverified, and a
+        # wrong guess hides every session; `player` scopes it. Filter on m["User"]["id"] once checked on a live server.
         for m in await self._metadata("/status/sessions"):
             player = m.get("Player") or {}
             if self._match(player.get("title"), player.get("product")):
@@ -136,14 +147,17 @@ class PlexServer(_Server):
 
     async def play(self, item_id: str) -> bool:
         _check_id(item_id)
-        reg = er.async_get(self.hass)
-        entity = next((
-            e.entity_id for e in reg.entities.values()
+        players = [
+            (e.entity_id, st.name) for e in er.async_get(self.hass).entities.values()
             if e.platform == "plex" and e.entity_id.startswith("media_player.") and not e.disabled_by
             and (st := self.hass.states.get(e.entity_id)) and st.state != "unavailable"
-            and self._match(e.entity_id, st.name)), None)
-        if entity is None:
+            and self._match(e.entity_id, st.name)]
+        if not self._player and len(players) > 1:  # never start on a random phone: only a TV-looking player
+            players = [p for p in players if any(w in n.casefold() for n in p for w in ("samsung", "tv"))]
+        if not players:
+            _LOGGER.debug("plex play: no Plex player to target; set the player filter if there are several")
             return False
+        entity = players[0][0]
         try:
             machine = (await self._json("/identity"))["MediaContainer"]["machineIdentifier"]
             await self.hass.services.async_call("media_player", "play_media", {
@@ -169,7 +183,7 @@ class JellyfinServer(_Server):
             "subtitle": m.get("Name") if show else (str(m["ProductionYear"]) if m.get("ProductionYear") else None),
             "type": m.get("Type", "").lower(),
             "progress": _frac((m.get("UserData") or {}).get("PlaybackPositionTicks"), m.get("RunTimeTicks")),
-            "image": f"{ART}/jellyfin/{m['Id']}",
+            "image": f"{ART}/jellyfin/{m['Id']}" if ID_RE.fullmatch(str(m["Id"])) else None,
         }
 
     async def users(self) -> list[dict]:
@@ -235,7 +249,7 @@ class Library:
     def server(self, name: str):
         return self._servers.get(name)
 
-    async def async_refresh(self) -> None:
+    async def async_refresh(self, _now: datetime | None = None) -> None:
         async def one(s) -> None:
             try:
                 self.items[s.name] = {"continue": await s.continue_watching(), "recent": await s.recently_added()}
@@ -247,7 +261,7 @@ class Library:
         if self.items != before:
             self._on_change()
 
-    async def async_refresh_sessions(self) -> None:
+    async def async_refresh_sessions(self, _now: datetime | None = None) -> None:
         async def one(s) -> list[dict]:
             try:
                 return await s.sessions()
@@ -262,14 +276,8 @@ class Library:
 
     def async_start(self) -> Callable[[], None]:
         """Schedule polling (no immediate fetch: callers await async_refresh() first). Returns cancel."""
-        async def items(_now) -> None:
-            await self.async_refresh()
-
-        async def sessions(_now) -> None:
-            await self.async_refresh_sessions()
-
-        cancels = [async_track_time_interval(self.hass, items, timedelta(minutes=5)),
-                   async_track_time_interval(self.hass, sessions, timedelta(seconds=10))]
+        cancels = [async_track_time_interval(self.hass, self.async_refresh, timedelta(minutes=5)),
+                   async_track_time_interval(self.hass, self.async_refresh_sessions, timedelta(seconds=10))]
 
         def cancel() -> None:
             for c in cancels:

@@ -18,6 +18,10 @@
         "title": "Allow HomeHub on the TV",
         "description": "Make sure the TV at {host} is on. Select **Submit**, then press **Allow** on the TV within 30 seconds."
       },
+      "reauth_confirm": {
+        "title": "Press Allow on the TV within 30 seconds",
+        "description": "The TV at {host} no longer accepts HomeHub. Make sure it is on, select **Submit**, then press **Allow** on the TV within 30 seconds."
+      },
       "reconfigure": {
         "title": "Change the TV connection",
         "description": "Update the TV address. You will pair with the TV again on the next screen.",
@@ -39,7 +43,7 @@
     },
     "abort": {
       "single_instance_allowed": "HomeHub Media is already set up. Only one instance is supported.",
-      "already_configured": "This TV is already configured.",
+      "reauth_successful": "HomeHub is paired with the TV again.",
       "reconfigure_successful": "The TV connection was updated."
     }
   },
@@ -102,7 +106,7 @@
         "data_description": {
           "enabled": "Apps shown on the remote card.",
           "overrides": "Optional. TV app IDs as app=id pairs separated by commas, for example netflix=3201907018807, youtube=111299001912.",
-          "rescan": "Ask the TV which apps are installed and fill in the fields above. Nothing is saved until you submit without this ticked."
+          "rescan": "Ask the TV which apps are installed and tick them above. The TV must be on. App IDs you entered still take priority. Nothing is saved until you submit without this ticked."
         }
       },
       "servers": {
