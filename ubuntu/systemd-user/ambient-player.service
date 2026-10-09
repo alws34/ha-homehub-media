@@ -1,0 +1,27 @@
+[Unit]
+Description=Home Hub Dual-Layer Ambient Player
+After=graphical-session.target pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/ambient-player/ambient_player.py --config /etc/ambient-player/config.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+Environment=PYTHONUNBUFFERED=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/srv/homehub/jellyfin-media/library/Ambience/Videos
+ReadOnlyPaths=/srv/homehub/jellyfin-media/library/Ambience/Soundtracks
+ReadWritePaths=%h/.local/state/ambient-player
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,12 @@
+# Add these as Dashboard resources, all with type: module.
+resources:
+  - url: /local/homehub-media-ui/homehub-ambience-media-card.js
+    type: module
+  - url: /local/homehub-media-ui/homehub-media-hub-control-pad.js
+    type: module
+  - url: /local/homehub-media-ui/homehub-media-hub-keyboard-card.js
+    type: module
+  - url: /local/homehub-media-ui/homehub-remote-swipe-card.js
+    type: module
+  - url: /local/homehub-media-ui/homehub-tv-keyboard-card-v3.js
+    type: module

@@ -1,0 +1,24 @@
+{
+  "listen_host": "YOUR_UBUNTU_HOST_IP",
+  "listen_port": 8098,
+  "allowed_clients": [
+    "127.0.0.1",
+    "YOUR_HOME_ASSISTANT_IP"
+  ],
+  "clients": {
+    "jellyfin": {
+      "unit": "jellyfin-browser.service",
+      "home_url": "http://127.0.0.1:8096/web/"
+    },
+    "sonarr": {
+      "unit": "sonarr-browser.service",
+      "home_url": "http://127.0.0.1:8989/"
+    },
+    "radarr": {
+      "unit": "radarr-browser.service",
+      "home_url": "http://127.0.0.1:7878/"
+    }
+  },
+  "ambient_stop_url": "http://127.0.0.1:8097/v2/stop",
+  "ambient_stop_timeout_seconds": 15
+}
