@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Home Hub Media Hub coordinator with keyboardless Firefox control.
 
-The HTTP service is reachable only from the configured allowlist. Opening a
-Media Hub app stops Ambience before starting its dedicated Firefox user
-service. Remote commands are accepted only while one approved service is active
-and are restricted to a fixed key allowlist. No arbitrary text or URL can be
-supplied by a caller.
+Every request must come from the IP allowlist, name a configured Host and carry
+the bearer token; request bodies must be JSON. Opening a Media Hub app starts
+its dedicated browser user service (Home Assistant stops Ambience first).
+Remote commands are accepted only while one approved service is active and are
+restricted to a fixed key allowlist. No arbitrary URL can be supplied by a
+caller.
 """
 
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
 import logging
@@ -19,18 +21,18 @@ import re
 import subprocess
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Callable
-
 
 LOGGER = logging.getLogger("homehub-media-hub")
 MAX_REQUEST_BYTES = 4096
+MAX_CONNECTIONS = 16
+MIN_TOKEN_LENGTH = 32
+CLIENT_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 # X11 keysyms accepted by Mutter's RemoteDesktop Session interface.
 KEYSYM = {
@@ -107,16 +109,60 @@ class Config:
     listen_port: int
     allowed_clients: frozenset[ipaddress.IPv4Address | ipaddress.IPv6Address]
     clients: dict[str, ClientConfig]
-    ambient_stop_url: str
-    ambient_stop_timeout_seconds: float
+    auth_token: str = field(repr=False)
+    allowed_hosts: frozenset[str] = frozenset()  # empty: default_hosts() of the bound address
 
-    @property
-    def client_unit(self) -> str:
-        return self.clients["jellyfin"].unit
+    @classmethod
+    def from_dict(cls, raw: dict) -> Config:
+        """Validate a configuration mapping. Port 0 (ephemeral) is accepted here for tests only."""
+        try:
+            listen_host = str(ipaddress.ip_address(raw["listen_host"]))
+            listen_port = int(raw["listen_port"])
+            allowed_clients = frozenset(
+                ipaddress.ip_address(value) for value in raw["allowed_clients"]
+            )
+            raw_clients = raw["clients"]
+            auth_token = raw["auth_token"]
+            allowed_hosts = raw.get("allowed_hosts", [])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CoordinatorError(f"Invalid configuration: {exc}") from exc
 
-    @property
-    def client_home_url(self) -> str:
-        return self.clients["jellyfin"].home_url
+        if not 0 <= listen_port <= 65535:
+            raise CoordinatorError("listen_port must be between 1 and 65535")
+        if not allowed_clients:
+            raise CoordinatorError("allowed_clients must not be empty")
+        if not isinstance(auth_token, str) or len(auth_token) < MIN_TOKEN_LENGTH:
+            raise CoordinatorError(f"auth_token must be at least {MIN_TOKEN_LENGTH} characters")
+        if not isinstance(allowed_hosts, list) or not all(isinstance(h, str) and h for h in allowed_hosts):
+            raise CoordinatorError("allowed_hosts must be a list of host[:port] names")
+        if not isinstance(raw_clients, dict) or not raw_clients:
+            raise CoordinatorError("clients must be a non-empty object")
+        clients: dict[str, ClientConfig] = {}
+        for mode, raw_client in raw_clients.items():
+            if not CLIENT_RE.fullmatch(mode):
+                raise CoordinatorError("client names must be lowercase slugs")
+            if not isinstance(raw_client, dict):
+                raise CoordinatorError(f"client configuration for {mode} is invalid")
+            unit = str(raw_client.get("unit", ""))
+            home_url = str(raw_client.get("home_url", ""))
+            if not unit.endswith(".service") or "/" in unit:
+                raise CoordinatorError(f"client unit for {mode} is invalid")
+            parsed_home = urllib.parse.urlsplit(home_url)
+            if (
+                parsed_home.scheme != "http"
+                or parsed_home.hostname not in {"127.0.0.1", "localhost"}
+                or not parsed_home.path
+            ):
+                raise CoordinatorError(f"client home URL for {mode} must be a loopback HTTP URL")
+            clients[mode] = ClientConfig(unit=unit, home_url=home_url)
+        return cls(
+            listen_host=listen_host,
+            listen_port=listen_port,
+            allowed_clients=allowed_clients,
+            clients=clients,
+            auth_token=auth_token,
+            allowed_hosts=frozenset(h.lower() for h in allowed_hosts),
+        )
 
 
 def load_config(path: Path) -> Config:
@@ -124,53 +170,16 @@ def load_config(path: Path) -> Config:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise CoordinatorError(f"Could not load configuration: {exc}") from exc
-
-    try:
-        listen_host = str(ipaddress.ip_address(raw["listen_host"]))
-        listen_port = int(raw["listen_port"])
-        allowed_clients = frozenset(
-            ipaddress.ip_address(value) for value in raw["allowed_clients"]
-        )
-        raw_clients = raw["clients"]
-        ambient_stop_url = str(raw["ambient_stop_url"])
-        ambient_stop_timeout_seconds = float(raw["ambient_stop_timeout_seconds"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise CoordinatorError(f"Invalid configuration: {exc}") from exc
-
-    if not 1 <= listen_port <= 65535:
+    config = Config.from_dict(raw)
+    if config.listen_port == 0:
         raise CoordinatorError("listen_port must be between 1 and 65535")
-    if not allowed_clients:
-        raise CoordinatorError("allowed_clients must not be empty")
-    if not isinstance(raw_clients, dict) or set(raw_clients) != {"jellyfin", "sonarr", "radarr"}:
-        raise CoordinatorError("clients must define exactly jellyfin, sonarr, and radarr")
-    clients: dict[str, ClientConfig] = {}
-    for mode, raw_client in raw_clients.items():
-        if not isinstance(raw_client, dict):
-            raise CoordinatorError(f"client configuration for {mode} is invalid")
-        unit = str(raw_client.get("unit", ""))
-        home_url = str(raw_client.get("home_url", ""))
-        if not unit.endswith(".service") or "/" in unit:
-            raise CoordinatorError(f"client unit for {mode} is invalid")
-        parsed_home = urllib.parse.urlsplit(home_url)
-        if (
-            parsed_home.scheme != "http"
-            or parsed_home.hostname not in {"127.0.0.1", "localhost"}
-            or not parsed_home.path
-        ):
-            raise CoordinatorError(f"client home URL for {mode} must be a loopback HTTP URL")
-        clients[mode] = ClientConfig(unit=unit, home_url=home_url)
-    if not ambient_stop_url.startswith("http://"):
-        raise CoordinatorError("ambient_stop_url must use the local HTTP backend")
-    if ambient_stop_timeout_seconds <= 0 or ambient_stop_timeout_seconds > 60:
-        raise CoordinatorError("ambient_stop_timeout_seconds must be in (0, 60]")
-    return Config(
-        listen_host=listen_host,
-        listen_port=listen_port,
-        allowed_clients=allowed_clients,
-        clients=clients,
-        ambient_stop_url=ambient_stop_url,
-        ambient_stop_timeout_seconds=ambient_stop_timeout_seconds,
-    )
+    return config
+
+
+def default_hosts(host: str, port: int) -> frozenset[str]:
+    """Host header values accepted when allowed_hosts is not configured."""
+    names = {host, "localhost", "127.0.0.1"} if ipaddress.ip_address(host).is_loopback else {host}
+    return frozenset(value for name in names for value in (name, f"{name}:{port}"))
 
 
 class MutterRemoteInput:
@@ -252,12 +261,13 @@ class MutterRemoteInput:
             "tab": KEYSYM["tab"],
             "select": KEYSYM["return"],
             "play_pause": KEYSYM["space"],
+            "stop": KEYSYM["escape"],
         }
         if command in simple:
             return self._key(simple[command])
         if command == "shift_tab":
             return self._shifted(KEYSYM["tab"])
-        if command in {"back", "stop"}:
+        if command == "back":
             return self._chord(KEYSYM["alt_l"], KEYSYM["left"])
         if command == "enter":
             return self._key(KEYSYM["return"])
@@ -324,7 +334,7 @@ class MutterRemoteInput:
                     session.call_sync(
                         "Stop", None, Gio.DBusCallFlags.NONE, 5000, None
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - best-effort D-Bus cleanup
                     LOGGER.warning("Could not close incomplete GNOME remote-input session")
 
     def _ensure_session(self) -> tuple[object, object, object]:
@@ -355,7 +365,7 @@ class MutterRemoteInput:
                 session.call_sync(
                     "Stop", None, gio.DBusCallFlags.NONE, 5000, None
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort D-Bus cleanup
                 LOGGER.warning("Could not close GNOME remote-input session")
 
     def _with_session(
@@ -454,13 +464,13 @@ class Coordinator:
         self,
         config: Config,
         runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-        urlopen: Callable[..., object] = urllib.request.urlopen,
         remote_input: MutterRemoteInput | None = None,
     ) -> None:
         self.config = config
         self._runner = runner
-        self._urlopen = urlopen
-        self._remote_input = remote_input or MutterRemoteInput(config.client_home_url)
+        # Replaced by _input_for_active_client() whenever the active client differs.
+        first_home_url = next(iter(config.clients.values())).home_url
+        self._remote_input = remote_input or MutterRemoteInput(first_home_url)
         self._lock = threading.Lock()
 
     def _systemctl(self, action: str, unit: str) -> subprocess.CompletedProcess[str]:
@@ -494,26 +504,6 @@ class Coordinator:
             "remote_available": active,
         }
 
-    def _stop_ambience(self) -> None:
-        request = urllib.request.Request(
-            self.config.ambient_stop_url,
-            data=b"{}",
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            response = self._urlopen(
-                request, timeout=self.config.ambient_stop_timeout_seconds
-            )
-            status = getattr(response, "status", 0)
-            if not 200 <= status < 300:
-                raise CoordinatorError(f"Ambient stop returned HTTP {status}")
-            close = getattr(response, "close", None)
-            if close:
-                close()
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise CoordinatorError("Could not confirm that Ambience stopped") from exc
-
     def open(self, mode: str = "jellyfin") -> dict[str, object]:
         with self._lock:
             if mode not in self.config.clients:
@@ -524,7 +514,6 @@ class Coordinator:
             self._release_remote_input()
             for active_mode in current["active_modes"]:
                 self._systemctl("stop", self.config.clients[active_mode].unit)
-            self._stop_ambience()
             result = self._systemctl("start", self.config.clients[mode].unit)
             if result.returncode != 0:
                 raise CoordinatorError("Media Hub client service did not start")
@@ -617,22 +606,61 @@ class Coordinator:
 
 
 class CoordinatorServer(ThreadingHTTPServer):
+    """Threaded server with at most MAX_CONNECTIONS live connections; extras are closed unanswered."""
+
     daemon_threads = True
     coordinator: Coordinator
+    allowed_hosts: frozenset[str]
+    slots: threading.BoundedSemaphore
+
+    def process_request(self, request, client_address) -> None:
+        if not self.slots.acquire(blocking=False):
+            self.close_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def shutdown_request(self, request) -> None:
+        super().shutdown_request(request)
+        self.slots.release()
+
+
+def make_server(config: Config) -> CoordinatorServer:
+    """Bind (not yet serve) the HTTP server for config."""
+    server = CoordinatorServer((config.listen_host, config.listen_port), Handler)
+    server.coordinator = Coordinator(config)
+    server.slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+    server.allowed_hosts = config.allowed_hosts or default_hosts(config.listen_host, server.server_port)
+    return server
 
 
 class Handler(BaseHTTPRequestHandler):
     server: CoordinatorServer
+    timeout = 10  # socket read timeout: a stalled client cannot pin a handler thread
 
     def log_message(self, format_string: str, *args: object) -> None:
         LOGGER.info("%s %s", self.client_address[0], format_string % args)
 
-    def _authorized(self) -> bool:
+    def _rejection(self) -> tuple[HTTPStatus, str] | None:
+        """Guard order is part of the API: IP 403, Host 421, bearer token 401, JSON body 415."""
+        config = self.server.coordinator.config
         try:
-            client = ipaddress.ip_address(self.client_address[0])
+            client_allowed = ipaddress.ip_address(self.client_address[0]) in config.allowed_clients
         except ValueError:
-            return False
-        return client in self.server.coordinator.config.allowed_clients
+            client_allowed = False
+        if not client_allowed:
+            return HTTPStatus.FORBIDDEN, "client_not_allowed"
+        if (self.headers.get("Host") or "").lower() not in self.server.allowed_hosts:
+            return HTTPStatus.MISDIRECTED_REQUEST, "host_not_allowed"
+        presented = (self.headers.get("Authorization") or "").encode()
+        if not hmac.compare_digest(presented, f"Bearer {config.auth_token}".encode()):
+            return HTTPStatus.UNAUTHORIZED, "unauthorized"
+        if (
+            self.command in ("POST", "PUT", "PATCH")
+            and self.headers.get("Content-Length", "0") != "0"
+            and not (self.headers.get("Content-Type") or "").lower().startswith("application/json")
+        ):
+            return HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"
+        return None
 
     def _send(self, status: HTTPStatus, payload: dict[str, object]) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -644,8 +672,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _guard(self) -> bytes | None:
-        if not self._authorized():
-            self._send(HTTPStatus.FORBIDDEN, {"error": "client_not_allowed"})
+        rejection = self._rejection()
+        if rejection is not None:
+            self.close_connection = True
+            self._send(rejection[0], {"error": rejection[1]})
             return None
         length = int(self.headers.get("Content-Length", "0") or "0")
         if length < 0 or length > MAX_REQUEST_BYTES:
@@ -738,9 +768,7 @@ def main() -> int:
         print(f"ERROR: {exc}")
         return 2
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    coordinator = Coordinator(config)
-    server = CoordinatorServer((config.listen_host, config.listen_port), Handler)
-    server.coordinator = coordinator
+    server = make_server(config)
     LOGGER.info("Media Hub coordinator listening on %s:%d", config.listen_host, config.listen_port)
     try:
         server.serve_forever(poll_interval=0.5)

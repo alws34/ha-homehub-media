@@ -17,6 +17,12 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=%t
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+RestrictSUIDSGID=true
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=default.target
