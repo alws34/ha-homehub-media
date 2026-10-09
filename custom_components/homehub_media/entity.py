@@ -1,6 +1,8 @@
 """Shared base for HomeHub Media entities: one device per entry, refreshed on every hub update."""
 from __future__ import annotations
 
+import time
+
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity
@@ -24,3 +26,7 @@ class HomeHubEntity(Entity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_UPDATE, self.async_write_ha_state))
+
+    def _touch(self) -> None:
+        """Entity actions are user commands: they hold off idle auto ambience like the card's do."""
+        self.hub.last_command = time.monotonic()

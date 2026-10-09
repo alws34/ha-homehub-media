@@ -24,6 +24,8 @@ class SleepTimerSensor(HomeHubEntity, SensorEntity):
 
 
 class NowPlayingSensor(HomeHubEntity, SensorEntity):
+    _attr_unrecorded_attributes = frozenset({"position", "duration"})
+
     @property
     def _playing(self) -> dict | None:
         return next(iter(self.hub.library.now_playing if self.hub.library else []), None)

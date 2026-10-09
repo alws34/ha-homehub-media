@@ -1,21 +1,21 @@
 """Voice assistant conversation agent: the configured model driving the HomeHub Media tools."""
 from __future__ import annotations
 
-import json
+import logging
 from typing import Literal
 
 from homeassistant.components import conversation
 from homeassistant.const import MATCH_ALL
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import intent, llm
+from homeassistant.helpers.json import json_dumps
 
 from . import assistant
 from .const import DOMAIN, OPT_ASSISTANT
 from .entity import HomeHubEntity
 
+_LOGGER = logging.getLogger(__name__)
 MAX_ROUNDS = 5
-PROMPT = ("You are the HomeHub voice assistant: you control the user's TV and room ambience with your tools. "
-          "Answer briefly in plain text; replies are spoken aloud.")
 
 
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
@@ -32,7 +32,7 @@ def _messages(content: list[conversation.Content]) -> list[dict]:
             out.append({"role": "assistant", "content": c.content,
                         "tool_calls": [(t.id, t.tool_name, t.tool_args) for t in c.tool_calls or []]})
         elif isinstance(c, conversation.ToolResultContent):
-            out.append({"role": "tool", "tool_call_id": c.tool_call_id, "content": json.dumps(c.tool_result)})
+            out.append({"role": "tool", "tool_call_id": c.tool_call_id, "content": json_dumps(c.tool_result)})
     return out
 
 
@@ -47,7 +47,7 @@ class HomeHubConversationEntity(HomeHubEntity, conversation.ConversationEntity):
                                     chat_log: conversation.ChatLog) -> conversation.ConversationResult:
         try:
             await chat_log.async_provide_llm_data(
-                user_input.as_llm_context(DOMAIN), [assistant.API_ID], PROMPT, user_input.extra_system_prompt)
+                user_input.as_llm_context(DOMAIN), [assistant.API_ID], None, user_input.extra_system_prompt)
         except conversation.ConverseError as err:
             return err.as_conversation_result()
         tools = assistant.tool_specs(chat_log.llm_api)
@@ -56,9 +56,11 @@ class HomeHubConversationEntity(HomeHubEntity, conversation.ConversationEntity):
                 reply = await assistant.complete(self.hass, self.hub.options[OPT_ASSISTANT],
                                                  chat_log.content[0].content, _messages(chat_log.content[1:]), tools)
             except HomeAssistantError as err:  # "cannot_connect" / "invalid_auth", never the raw error
+                _LOGGER.warning("Assistant request failed: %s", err)
                 response = intent.IntentResponse(language=user_input.language)
                 response.async_set_error(intent.IntentResponseErrorCode.UNKNOWN,
-                                         f"The assistant is unavailable: {err}")
+                                         "The assistant's API key was rejected." if str(err) == "invalid_auth"
+                                         else "I can't reach the assistant right now.")
                 return conversation.ConversationResult(response=response, conversation_id=chat_log.conversation_id)
             calls = [llm.ToolInput(id=i, tool_name=n, tool_args=a) for i, n, a in reply.tool_calls]
             async for _result in chat_log.async_add_assistant_content(conversation.AssistantContent(

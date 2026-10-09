@@ -26,7 +26,9 @@ async def test_selects_call_managers(hass, setup_entry):
     with patch.object(hub.ambience, "start") as start, patch.object(hub.ambience, "stop") as stop, \
             patch.object(hub.activity, "set") as set_activity:
         await _call(hass, "select", "select_option", mode, option="dinner")
+        hub.ambience.auto, hub.last_command = True, 0.0  # idle for ages, auto ambience on
         await _call(hass, "select", "select_option", mode, option="off")
+        assert hub.last_command > 0  # the user's "off" holds off the idle auto-start
         await _call(hass, "select", "select_option", activity, option="tv")
     start.assert_awaited_once_with("dinner")
     stop.assert_awaited_once_with()
@@ -36,9 +38,11 @@ async def test_selects_call_managers(hass, setup_entry):
 async def test_switches(hass, setup_entry):
     hub = setup_entry.runtime_data
     quiet, auto = _eid(hass, setup_entry, "switch", "quiet_mode"), _eid(hass, setup_entry, "switch", "auto_ambience")
+    hub.last_command = 0.0
     with patch.object(hub.activity, "set_quiet") as set_quiet:
         await _call(hass, "switch", "turn_on", quiet)
     set_quiet.assert_awaited_once_with(True)
+    assert hub.last_command > 0
     hub.activity.quiet = True
     async_dispatcher_send(hass, SIGNAL_UPDATE)
     await hass.async_block_till_done()
