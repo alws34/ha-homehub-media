@@ -106,7 +106,7 @@ class HomeHubLLMAPI(llm.API):
         start = HubTool("AmbienceStart", "Start an ambience mode (lights, visuals and sound) by its id.",
                         {vol.Required("mode"): vol.In([m["id"] for m in modes])},
                         lambda hub, mode: hub.ambience.start(mode))
-        return llm.APIInstance(api=self, api_prompt=prompt, llm_context=llm_context, tools=[*TOOLS, start])
+        return llm.APIInstance(api=self, api_prompt=prompt, llm_context=llm_context, tools=[*TOOLS, start] if modes else TOOLS)
 
 
 def tool_specs(api: llm.APIInstance) -> list[dict]:
@@ -117,7 +117,7 @@ def tool_specs(api: llm.APIInstance) -> list[dict]:
 
 def _sdk_errors() -> tuple[type[Exception], ...]:
     """APIError of each SDK already imported (they load lazily; an absent SDK cannot have raised)."""
-    return tuple(m.APIError for n in ("openai", "anthropic") if (m := sys.modules.get(n)))
+    return tuple(e for n in ("openai", "anthropic") if (e := getattr(sys.modules.get(n), "APIError", None)))
 
 
 @contextmanager
