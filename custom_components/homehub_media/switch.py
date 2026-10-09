@@ -15,7 +15,12 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
     async_add_entities([QuietSwitch(hub, "quiet_mode"), AutoAmbienceSwitch(hub, "auto_ambience")])
 
 
-class QuietSwitch(HomeHubEntity, SwitchEntity):
+class QuietSwitch(HomeHubEntity, SwitchEntity, RestoreEntity):
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if last := await self.async_get_last_state():  # the flag only; the volume follows the next activity
+            self.hub.activity.quiet = last.state == STATE_ON
+
     @property
     def is_on(self) -> bool:
         return self.hub.activity.quiet

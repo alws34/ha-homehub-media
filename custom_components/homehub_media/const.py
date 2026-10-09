@@ -30,7 +30,6 @@ OPT_ASSISTANT = "assistant"  # {"provider": "ollama"|"openai"|"claude", "url": s
 # MODE  = {"id": str, "name": str, "icon": str, "scene": str|None, "flicker": [light entity ids], "lights_only": bool}
 
 ACTIVITIES = ("off", "tv", "box", "pc")
-PHASES = ("ready", "transitioning", "needs_reset", "blocked")
 TARGETS = ("tv", "box", "pc")
 
 DEFAULT_MODES = [

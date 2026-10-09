@@ -5,7 +5,8 @@ from urllib.parse import quote
 
 import pytest
 import voluptuous as vol
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.core import Context
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError, Unauthorized
 
 from custom_components.homehub_media.ambience import STATE_PATH
 from custom_components.homehub_media.api import _signed
@@ -45,12 +46,17 @@ async def test_page_state_requires_auth(hass, hass_client_no_auth, setup_entry):
     assert resp.status == 401
 
 
-async def test_page_state_signed(hass, hass_client_no_auth, setup_entry):
+async def test_page_state_signed_and_bound_to_the_page_session(hass, hass_client_no_auth, setup_entry):
+    hub = setup_entry.runtime_data
+    hub.ambience._sid, hub.ambience.page_last_seen = "s1", 0.0
     client = await hass_client_no_auth()
-    resp = await client.get(setup_entry.runtime_data.sign_path(STATE_PATH))
+    for sid in ("old", ""):  # validly signed, but not the current page session
+        assert (await client.get(hub.sign_path(f"{STATE_PATH}?sid={sid}"))).status == 404
+    assert hub.ambience.page_last_seen == 0.0  # a stale page is no heartbeat
+    resp = await client.get(hub.sign_path(f"{STATE_PATH}?sid=s1"))
     assert resp.status == 200 and resp.headers["Cache-Control"] == "no-store"
     body = await resp.json()
-    assert body["stop"] is True and body["next"].startswith(f"{STATE_PATH}?authSig=")
+    assert body["stop"] is True and body["next"] is None and hub.ambience.page_last_seen > 0
 
 
 async def test_art_rejects_unknown_server(hass, hass_client, setup_entry):
@@ -92,11 +98,9 @@ async def test_catalog_signs_media_previews_only(hass, hass_ws_client, setup_ent
     amb._catalog = {"visuals": [{"id": "rain", "preview": "/media/local/homehub/ambience/videos/rain.webp",
                                  "path": "rain.mp4", "preview_path": "rain.webp"}],
                     "soundtracks": [{"id": "pc", "preview": "/local/Ambience/pc.webp"}, {"id": "x", "preview": None}]}
-    amb.refresh_catalog = AsyncMock()
     ws = await hass_ws_client(hass)
-    await ws.send_json({"id": 1, "type": "homehub_media/catalog", "refresh": True})
+    await ws.send_json({"id": 1, "type": "homehub_media/catalog"})
     res = (await ws.receive_json())["result"]
-    amb.refresh_catalog.assert_awaited_once()
     visual = res["visuals"][0]
     assert visual["preview"].startswith("/media/local/homehub/ambience/videos/rain.webp?authSig=")
     assert "path" not in visual and "preview_path" not in visual
@@ -134,3 +138,10 @@ async def test_service_calls_hub_and_records_command(hass, setup_entry):
     assert await hass.config_entries.async_unload(setup_entry.entry_id)
     with pytest.raises(ServiceValidationError, match="not set up"):
         await hass.services.async_call(DOMAIN, "remote", {"command": "up"}, blocking=True)
+
+
+async def test_scans_are_admin_only(hass, setup_entry, hass_read_only_user):
+    for service in ("rescan_apps", "refresh_catalog"):
+        with pytest.raises(Unauthorized):
+            await hass.services.async_call(DOMAIN, service, {}, blocking=True,
+                                           context=Context(user_id=hass_read_only_user.id))

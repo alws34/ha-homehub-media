@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from functools import lru_cache
 from urllib.parse import quote
@@ -16,7 +16,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
-from .activity import OFF_STATES, ActivityManager
+from .activity import ActivityManager
 from .ambience import AmbienceManager
 from .const import (
     APP_CATALOG,
@@ -28,6 +28,7 @@ from .const import (
     DEFAULT_DAYPARTS,
     DEFAULT_MODES,
     DEFAULT_VOLUME,
+    DOMAIN,
     OPT_AMBIENCE,
     OPT_APPS,
     OPT_BOX,
@@ -47,25 +48,35 @@ from .keyboard import KeyboardBridge
 from .library import JellyfinServer, Library, PlexServer
 from .pc import AmbientPlayerClient, CoordinatorClient
 from .store import HomeHubStore
-from .tv import APP_ID_RE, SamsungTV
+from .tv import APP_ID_RE, PairingDenied, SamsungTV
 
 _LOGGER = logging.getLogger(__name__)
 PC_KEYS = {**PC_COMMANDS, "play": "play_pause", "pause": "play_pause"}  # the PC only has a toggle
 NAMES = {"tv": "TV", "box": "streaming box", "pc": "media PC", "keyboard": "keyboard bridge"}
 PLAY_TIMEOUT, PLAY_RETRY = 15, 3  # s: a just-launched Plex/Jellyfin app needs a moment before remote play works
+PC_MOVE, PC_SCROLL, PC_TEXT_MAX = 160, 240, 100  # the media-PC coordinator's limits
 
 
-def sign(hass: HomeAssistant, path: str, refresh_token_id: str | None = None) -> str:
+def loaded_hub(hass: HomeAssistant) -> Hub | None:
+    entries = hass.config_entries.async_loaded_entries(DOMAIN)
+    return entries[0].runtime_data if entries else None
+
+
+def sign(hass: HomeAssistant, path: str, refresh_token_id: str | None = None, hours: int = 24) -> str:
     """Signed URL (the content user's when no token is given), the same all hour so browsers can cache it."""
-    return _sign(hass, path, refresh_token_id, int(time.time() // 3600))
+    return _sign(hass, path, refresh_token_id, hours, int(time.time() // 3600))
 
 
 @lru_cache(maxsize=1024)  # ponytail: entries of past hours just age out of the LRU
-def _sign(hass: HomeAssistant, path: str, refresh_token_id: str | None, _hour: int) -> str:
-    signed = async_sign_path(hass, path, timedelta(hours=24), refresh_token_id=refresh_token_id,
+def _sign(hass: HomeAssistant, path: str, refresh_token_id: str | None, hours: int, _hour: int) -> str:
+    signed = async_sign_path(hass, path, timedelta(hours=hours), refresh_token_id=refresh_token_id,
                              use_content_user=refresh_token_id is None)
     path, _, query = signed.rpartition("?")  # HA returns the path decoded: '#', '?', ' ' would break the URL
     return f"{quote(path, safe='/')}?{query}"
+
+
+def _clamp(value: float, limit: float) -> float:
+    return max(-limit, min(limit, value))
 
 
 def _apps(section: dict | None) -> dict[str, str]:
@@ -82,7 +93,7 @@ class Hub:
         self.current_app: str | None = None
         self.pc_active: str | None = None
         self._paused = False  # last play/pause key sent to the TV
-        self._listeners: list[Callable[[], None]] = []
+        self._reauth = False  # a revoked TV token has started the reauth flow
         self._unsubs: list[Callable[[], None]] = []
         data, pc, kb = entry.data, self.options.get(OPT_PC), self.options.get(OPT_KEYBOARD)
         self.tv = SamsungTV(hass, data[CONF_HOST], data.get(CONF_TOKEN), data.get(CONF_MAC),
@@ -150,22 +161,30 @@ class Hub:
         self.async_notify()
 
     @callback
-    def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
-        self._listeners.append(cb)
-        return lambda: self._listeners.remove(cb)
-
-    @callback
     def async_notify(self) -> None:
         if self.activity.current != "tv":  # box, PC or off: no TV app in front any more
             self.current_app = None
-        for cb in list(self._listeners):
-            cb()
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
 
-    def sign_path(self, path: str) -> str:
-        return sign(self.hass, path)
+    def sign_path(self, path: str, hours: int = 24) -> str:
+        return sign(self.hass, path, hours=hours)
+
+    @property
+    def activities(self) -> list[str]:
+        return ["off", "tv", *(a for a in (OPT_BOX, OPT_PC) if self.options.get(a))]
 
     # ---- commands ----------------------------------------------------------------------------------
+
+    async def command[T](self, aw: Awaitable[T]) -> T:
+        """Run a user command: holds off idle auto ambience; a revoked TV token asks for re-pairing (once)."""
+        self.last_command = time.monotonic()
+        try:
+            return await aw
+        except PairingDenied:
+            if not self._reauth:
+                self._reauth = True
+                self.entry.async_start_reauth(self.hass)
+            raise
 
     def _target(self, target: str | None) -> str:
         return target or (self.activity.current if self.activity.current != "off" else "tv")
@@ -193,9 +212,6 @@ class Hub:
         else:
             raise self._unsupported(command, target)
 
-    async def send_key(self, key: str, hold_secs: float = 0) -> None:
-        await self.tv.send_key(key, hold_secs)
-
     def _server_url(self, app: str) -> str | None:
         server = APP_CATALOG.get(app, {}).get("server")
         return ((self.options.get(OPT_SERVERS) or {}).get(server) or {}).get("url") if server else None
@@ -215,8 +231,8 @@ class Hub:
             raise ServiceValidationError(f"{APP_CATALOG.get(app, {}).get('name', app)} is not installed on the TV")
         if self.ambience.uses_media and self.ambience.mode != "off":  # the page would sit on top of the app
             await self.ambience.stop()
-        if self.activity.current != "tv":
-            await self.activity.set("tv")
+        if self.activity.current != "tv" and not await self.activity.set("tv"):
+            return  # superseded by a newer activity request
         if app_id or not url:
             await self.tv.launch(app_id or app)  # installed app, or a raw Tizen id
         else:  # e.g. no Jellyfin app on the TV: the server's web UI in the TV browser
@@ -239,6 +255,8 @@ class Hub:
         if target == "tv":
             await self.tv.send_text(text)
         elif target == "pc" and self.pc_coord:
+            if len(text) > PC_TEXT_MAX or not (text.isascii() and text.isprintable()):
+                raise ServiceValidationError(f"The media PC accepts up to {PC_TEXT_MAX} plain ASCII characters")
             await self.pc_coord.text(text)
         elif target == "keyboard" and self.keyboard:
             await self.keyboard.type(text)
@@ -262,9 +280,9 @@ class Hub:
         target = target or ("pc" if self.activity.current == "pc" else "tv")
         if target == "pc" and self.pc_coord:
             if action == "move":
-                await self.pc_coord.pointer_move(dx, dy)
+                await self.pc_coord.pointer_move(_clamp(dx, PC_MOVE), _clamp(dy, PC_MOVE))
             elif action == "scroll":
-                await self.pc_coord.scroll(dy)
+                await self.pc_coord.scroll(_clamp(dy, PC_SCROLL))
             else:
                 await self.pc_coord.click("right" if action == "right_click" else "left")
         elif target == "tv" and action == "move":
@@ -285,8 +303,9 @@ class Hub:
             raise ServiceValidationError("The media PC is not configured")
         if self.ambience.uses_media and self.ambience.mode != "off":
             await self.ambience.stop()
-        if self.activity.current != "pc":  # re-selecting would reset the volume for nothing
-            await self.activity.set("pc")
+        # re-selecting would reset the volume for nothing; a superseded switch opens nothing
+        if self.activity.current != "pc" and not await self.activity.set("pc"):
+            return
         await self.pc_coord.open(client)
         self.pc_active = client
         self.async_notify()
@@ -316,15 +335,14 @@ class Hub:
         st = self.hass.states.get(tv_opt.get("entity") or "")
         app = self.hass.states.get(tv_opt.get("app_entity") or "")
         level = st.attributes.get("volume_level") if st else None
-        on = st.state not in OFF_STATES if st else self.tv.available
         return {
-            "tv": {"available": self.tv.available, "power": "on" if on else "off",
+            "tv": {"available": self.tv.available, "power": "on" if self.activity.is_on() else "off",
                    "volume": round(level * 100) if level is not None else None,
                    "muted": st.attributes.get("is_volume_muted") if st else None,
                    "keyboard_active": self.tv.keyboard_active, "pointer_active": self.tv.pointer_active,
                    "app": self._app_key(app.state) if app else self.current_app},
             "activity": {"current": self.activity.current, "phase": self.activity.phase, "quiet": self.activity.quiet,
-                         "available": ["off", "tv", *(a for a in (OPT_BOX, OPT_PC) if self.options.get(a))]},
+                         "available": self.activities},
             "targets": {"box": bool(self.options.get(OPT_BOX)), "pc": bool(self.pc_coord), "keyboard": bool(self.keyboard)},
             "apps": [{"key": k, "name": APP_CATALOG[k]["name"], "installed": bool(k in self.apps or self._server_url(k))}
                      for k in (self.options.get(OPT_APPS) or {}).get("enabled") or APP_CATALOG if k in APP_CATALOG],
