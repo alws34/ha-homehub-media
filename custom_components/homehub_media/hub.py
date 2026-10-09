@@ -103,6 +103,7 @@ class Hub:
     # ---- lifecycle ---------------------------------------------------------------------------------
 
     async def async_start(self) -> None:
+        await self.ambience.async_load()
         if self.library:
             self._unsubs.append(self.library.async_start())
         self._unsubs.append(async_track_time_interval(self.hass, self._poll_tv, timedelta(seconds=30)))
@@ -112,7 +113,7 @@ class Hub:
 
     async def _load(self) -> None:
         lib = self.library
-        await asyncio.gather(self.ambience.async_load(), self._poll_tv(),
+        await asyncio.gather(self.ambience.async_load_catalog(), self._poll_tv(),
                              *((lib.async_refresh(), lib.async_refresh_sessions()) if lib else ()))
 
     async def async_stop(self) -> None:

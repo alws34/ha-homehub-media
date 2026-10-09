@@ -287,6 +287,7 @@ async def test_refresh_catalog_tv_scans_and_strips_server_keys(hass, tmp_path):
     (vids / "Rain.mp4").write_bytes(b"x"); (vids / "Rain.webp").write_bytes(b"x")
     am = AmbienceManager(hass, hub_with(chill(radio={"radio_x": "https://example.com/live"})), HomeHubStore(hass))
     await am.async_load()
+    await am.async_load_catalog()
     await am.set_favorite("visual", "rain", True)
     c = am.catalog()
     assert c["visuals"] == [{"id": "rain", "kind": "visual", "title": "Rain", "source_type": "file", "live": False,
@@ -308,6 +309,7 @@ async def test_idle_auto_start(hass, tmp_path):
     am._hub.activity.current = "tv"; am._hub.tv.available = True
     am._hub.last_command = time.monotonic() - 3600
     await am.async_load()
+    await am.async_load_catalog()
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=61))
     await hass.async_block_till_done()
     assert am.mode == "off"  # auto is off
