@@ -1,16 +1,22 @@
 import asyncio
 import base64
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from samsungtvws.exceptions import UnauthorizedError
+from samsungtvws.exceptions import ConnectionFailure, UnauthorizedError
 
 from custom_components.homehub_media import tv as tvmod
 from custom_components.homehub_media.const import APP_CATALOG
 
 BASE = "http://192.0.2.1:8001/api/v2/applications/"
-ACKS = {}  # appId -> ed.apps.launch reply data (default 200, None = no reply); use monkeypatch.setitem
+DIAL = "http://192.0.2.1:8080/ws/apps/YouTube"
+VID = "B5unCXpegAw"
+
+
+def dial_xml(state):
+    return (f'<?xml version="1.0" encoding="UTF-8"?><service xmlns="urn:dial-multiscreen-org:schemas:dial">'
+            f"<name>YouTube</name><options allowStop=\"true\"/><state>{state}</state></service>")
 
 
 class FakeRemote:
@@ -24,12 +30,7 @@ class FakeRemote:
         self.cb = cb
     def is_alive(self): return True
     async def send_command(self, cmd, key_press_delay=None): await self.send_commands([cmd])
-    async def send_commands(self, cmds, key_press_delay=None):
-        self.sent.extend(cmds)
-        for c in cmds:
-            if c.params.get("event") == "ed.apps.launch" and (
-                    data := ACKS.get(c.params["data"]["appId"], 200)) is not None:
-                self.cb("ed.apps.launch", {"data": data})
+    async def send_commands(self, cmds, key_press_delay=None): self.sent.extend(cmds)  # the TV never acks
     async def close(self): ...
 
 
@@ -189,66 +190,148 @@ async def test_pointer_clamps(hass, fake_remote):
     assert sent[2]["params"] == {"Cmd": "LeftClick", "TypeOfRemote": "ProcessMouseDevice"}
 
 
-async def test_launch_ack_and_rest_fallback(hass, fake_remote, aioclient_mock, monkeypatch):
+@pytest.fixture
+def fast_sleep(monkeypatch):
+    """asyncio.sleep without the wait; the delays asked for are recorded."""
+    delays, real_sleep = [], asyncio.sleep
+    async def sleep(delay, *a, **kw):
+        delays.append(delay)
+        await real_sleep(0)
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    return delays
+
+
+async def test_launch_uses_rest_first_and_never_waits(hass, fake_remote, aioclient_mock):
     tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    aioclient_mock.post(BASE + "111299001912", json=True)
     await tv.launch("111299001912")
-    assert fake_remote["r"].sent[-1].as_dict() == {"method": "ms.channel.emit", "params": {
-        "event": "ed.apps.launch", "to": "host",
-        "data": {"action_type": "DEEP_LINK", "appId": "111299001912", "metaTag": ""}}}
-    assert aioclient_mock.call_count == 0
-    monkeypatch.setitem(ACKS, "3201907018807", 404)
-    monkeypatch.setitem(ACKS, "3201606009684", 404)
-    aioclient_mock.post(BASE + "3201907018807", json=True)
+    assert aioclient_mock.call_count == 1 and "r" not in fake_remote  # no WebSocket at all
     aioclient_mock.post(BASE + "3201606009684", status=404)
-    await tv.launch("3201907018807")  # negative ack -> REST POST launches it
-    assert aioclient_mock.call_count == 1
-    with pytest.raises(HomeAssistantError, match="did not launch"):
-        await tv.launch("3201606009684")  # not installed
+    aioclient_mock.post(BASE + "3201907018807", exc=TimeoutError())
+    async with asyncio.timeout(1):  # fire-and-forget: no reply is awaited
+        await tv.launch("3201606009684")  # REST 404 -> WebSocket launch
+        await tv.launch("3201907018807")  # REST unreachable -> WebSocket launch
+    assert [c.as_dict()["params"]["data"] for c in fake_remote["r"].sent] == [
+        {"action_type": "DEEP_LINK", "appId": "3201606009684", "metaTag": ""},
+        {"action_type": "DEEP_LINK", "appId": "3201907018807", "metaTag": ""}]
+    calls = aioclient_mock.call_count
+    await tv.launch("3202010022079", "http://x/", "NATIVE_LAUNCH")
+    assert aioclient_mock.call_count == calls  # REST cannot carry a metaTag
     for bad in ("../../etc", "..", ".hidden"):
         with pytest.raises(ServiceValidationError):
             await tv.launch(bad)
 
 
-async def test_launch_without_reply_falls_back_to_rest(hass, fake_remote, aioclient_mock, monkeypatch):
-    monkeypatch.setattr(tvmod, "ACK_TIMEOUT", 0.01)
-    monkeypatch.setitem(ACKS, "111299001912", None)
-    aioclient_mock.post(BASE + "111299001912", json=True)
-    await tvmod.SamsungTV(hass, "192.0.2.1", "tok", None).launch("111299001912")
-    assert aioclient_mock.call_count == 1
-
-
-async def test_concurrent_launches_are_serialised(hass, fake_remote, aioclient_mock, monkeypatch):
-    monkeypatch.setitem(ACKS, "111299001912", None)
-    monkeypatch.setitem(ACKS, "3201606009684", None)
-    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
-    a = hass.async_create_task(tv.launch("111299001912"))
-    b = hass.async_create_task(tv.launch("3201606009684"))
-    for _ in range(5):
-        await asyncio.sleep(0)
-    sent = fake_remote["r"].sent
-    assert [c.params["data"]["appId"] for c in sent] == ["111299001912"]  # B waits for A's reply
-    fake_remote["r"].cb("ed.apps.launch", {"data": 200})
-    for _ in range(5):
-        await asyncio.sleep(0)
-    assert [c.params["data"]["appId"] for c in sent] == ["111299001912", "3201606009684"]
-    assert a.done() and not b.done()  # A's reply did not resolve B
-    fake_remote["r"].cb("ed.apps.launch", {"data": 200})
-    await asyncio.gather(a, b)
-    assert aioclient_mock.call_count == 0
-
-
-async def test_open_url_falls_back_to_browser_id(hass, fake_remote, aioclient_mock, monkeypatch):
-    monkeypatch.setitem(ACKS, "org.tizen.browser", 404)
+async def test_open_url_raises_when_the_browser_stays_hidden(hass, fake_remote, aioclient_mock, fast_sleep):
     tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
     for bad in ("javascript:alert(1)", "http:nohost", "http://x/" + "a" * 2048):
         with pytest.raises(ServiceValidationError):
             await tv.open_url(bad)
-    await tv.open_url("http://192.0.2.9:8123/x")
+    aioclient_mock.get(BASE + "3202010022079", json={"id": "3202010022079", "running": True, "visible": False})
+    with pytest.raises(HomeAssistantError, match="does not allow opening web pages remotely"):
+        await tv.open_url("http://192.0.2.9:8123/x")
     assert [c.params["data"] for c in fake_remote["r"].sent] == [
-        {"action_type": "NATIVE_LAUNCH", "appId": "org.tizen.browser", "metaTag": "http://192.0.2.9:8123/x"},
-        {"action_type": "DEEP_LINK", "appId": "3202010022079", "metaTag": "http://192.0.2.9:8123/x"},
-    ]
-    assert aioclient_mock.call_count == 0  # metaTag launches never fall back to REST
+        {"action_type": "NATIVE_LAUNCH", "appId": "org.tizen.browser", "metaTag": "http://192.0.2.9:8123/x"}]
+    assert sum(fast_sleep) == 5 and aioclient_mock.call_count == 10
+    aioclient_mock.clear_requests()
+    tv.browser_id = "org.tizen.browser"  # an older TV, as discover_apps() finds it
+    aioclient_mock.get(BASE + "org.tizen.browser", json={"id": "org.tizen.browser", "visible": True})
+    await tv.open_url("http://192.0.2.9:8123/x")
+    assert aioclient_mock.call_count == 1
+
+
+def touch_flaky(fails, remotes):
+    class Flaky(FakeRemote):
+        async def open(self):
+            if fails:
+                raise fails.pop(0)
+    def factory(*a, **kw):
+        remotes.append(Flaky(*a, **kw)); return remotes[-1]
+    return factory
+
+
+async def test_connect_retries_touch_events(hass, monkeypatch, fast_sleep):
+    touch = ConnectionFailure({"event": "ms.remote.touchDisable", "data": {}})
+    remotes, fails = [], [touch, ConnectionFailure({"event": "ms.remote.touchEnable"})]
+    monkeypatch.setattr(tvmod, "SamsungTVWSAsyncRemote", touch_flaky(fails, remotes))
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    await tv.send_key("KEY_HOME")
+    assert len(remotes) == 3 and remotes[2].sent and tv.available and fast_sleep == [0.7, 0.7]
+    remotes.clear(); tv._remote = None
+    fails[:] = [touch] * 5  # still blocked after five tries
+    with pytest.raises(tvmod.CannotConnect):
+        await tv.send_key("KEY_HOME")
+    assert len(remotes) == 5 and not tv.available
+    remotes.clear()
+    fails[:] = [ConnectionFailure({"event": "ms.channel.timeOut"})]  # anything else: no retry
+    with pytest.raises(tvmod.CannotConnect):
+        await tv.send_key("KEY_HOME")
+    assert len(remotes) == 1
+
+
+async def test_youtube_state(hass, aioclient_mock):
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    for reply, state in (({"text": dial_xml("running")}, "running"), ({"text": dial_xml("stopped")}, "stopped"),
+                         ({"text": dial_xml("hidden")}, "unknown"), ({"status": 404}, "unknown"),
+                         ({"exc": TimeoutError()}, "unknown")):
+        aioclient_mock.clear_requests()
+        aioclient_mock.get(DIAL, **reply)
+        assert await tv.youtube_state() == state
+    assert aioclient_mock.mock_calls[0][3]["Origin"] == "package:com.google.android.youtube"
+
+
+async def youtube_run(hass, aioclient_mock, state, post_status=201):
+    """(http calls, ordered events) of play_youtube; events record the HTTP call count at each wait/key."""
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    events = []
+    async def send_key(key):
+        events.append(("key", key, aioclient_mock.call_count))
+    tv.send_key = send_key
+    aioclient_mock.get(DIAL, text=dial_xml(state))
+    aioclient_mock.post(DIAL, status=post_status)
+    real = asyncio.sleep
+    async def sleep(delay):
+        events.append(("wait", delay, aioclient_mock.call_count)); await real(0)
+    with patch.object(asyncio, "sleep", sleep):
+        await tv.play_youtube(VID)
+    return aioclient_mock.mock_calls, events
+
+
+async def test_play_youtube_cold_passes_the_profile_picker(hass, aioclient_mock):
+    calls, events = await youtube_run(hass, aioclient_mock, "stopped")
+    assert [(m.upper(), str(u)) for m, u, *_ in calls] == [("GET", DIAL), ("POST", DIAL), ("POST", DIAL)]
+    assert events == [("wait", 8, 2), ("key", "KEY_ENTER", 2), ("wait", 3, 3), ("key", "KEY_ENTER", 3)]
+    _, _, body, headers = calls[1]
+    assert body == f"v={VID}&t=0"
+    assert headers["Origin"] == "package:com.google.android.youtube"
+    assert headers["Content-Type"] == "text/plain; charset=utf-8"
+
+
+async def test_play_youtube_warm_and_errors(hass, aioclient_mock):
+    calls, events = await youtube_run(hass, aioclient_mock, "running", post_status=200)
+    assert [m.upper() for m, *_ in calls] == ["GET", "POST"]
+    assert events == [("wait", 3, 2), ("key", "KEY_ENTER", 2)]
+    aioclient_mock.clear_requests()
+    with pytest.raises(HomeAssistantError, match="HTTP 403"):  # e.g. a missing Origin header
+        await youtube_run(hass, aioclient_mock, "running", post_status=403)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    aioclient_mock.clear_requests()
+    for bad in ("short", "B5unCXpegAw&x", "../../etc/pa", "B5unCXpegAw\n"):
+        with pytest.raises(ServiceValidationError):
+            await tv.play_youtube(bad)
+    assert aioclient_mock.call_count == 0
+
+
+async def test_stop_youtube_dial_then_rest(hass, aioclient_mock):
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    aioclient_mock.delete(DIAL + "/run", status=200)
+    await tv.stop_youtube()
+    assert [(m.upper(), str(u)) for m, u, *_ in aioclient_mock.mock_calls] == [("DELETE", DIAL + "/run")]
+    aioclient_mock.clear_requests()
+    aioclient_mock.delete(DIAL + "/run", status=501)
+    aioclient_mock.delete(BASE + "111299001912", json=True)
+    await tv.stop_youtube()
+    assert [str(u) for _, u, *_ in aioclient_mock.mock_calls] == [DIAL + "/run", BASE + "111299001912"]
 
 
 async def test_restart_app_deletes_posts_and_waits_running(hass, aioclient_mock, monkeypatch):

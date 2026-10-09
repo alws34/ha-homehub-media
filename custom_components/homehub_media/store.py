@@ -25,8 +25,13 @@ class HomeHubStore:
         self._data["favorites"].update(saved.get("favorites", {}))
 
     def composition(self, mode_id: str) -> dict | None:
-        comp = self._data["compositions"].get(mode_id)
-        return dict(comp) if comp else None
+        """Re-validated on read, so data saved before a new key (e.g. "visuals") gets its default."""
+        if not (comp := self._data["compositions"].get(mode_id)):
+            return None
+        try:
+            return validate_composition(comp)
+        except ValueError:  # hand-edited storage: fall back to the mode's default composition
+            return None
 
     async def async_save_composition(self, mode_id: str, comp: dict) -> None:
         self._data["compositions"][mode_id] = validate_composition(comp)

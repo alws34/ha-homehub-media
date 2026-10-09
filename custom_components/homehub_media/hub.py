@@ -16,7 +16,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
-from .activity import ActivityManager
+from .activity import OFF_STATES, ActivityManager
 from .ambience import AmbienceManager
 from .const import (
     APP_CATALOG,
@@ -52,6 +52,7 @@ from .tv import APP_ID_RE, PairingDenied, SamsungTV
 
 _LOGGER = logging.getLogger(__name__)
 PC_KEYS = {**PC_COMMANDS, "play": "play_pause", "pause": "play_pause"}  # the PC only has a toggle
+ENTITY_COMMANDS = ("power", *VOLUME_COMMANDS)  # through the TV media player when one is configured
 NAMES = {"tv": "TV", "box": "streaming box", "pc": "media PC", "keyboard": "keyboard bridge"}
 PLAY_TIMEOUT, PLAY_RETRY = 15, 3  # s: a just-launched Plex/Jellyfin app needs a moment before remote play works
 PC_MOVE, PC_SCROLL, PC_TEXT_MAX = 160, 240, 100  # the media-PC coordinator's limits
@@ -200,7 +201,12 @@ class Hub:
             # ponytail: toggles on the last key sent, not the player's real state; worst case one extra press
             command = "play" if self._paused else "pause"
         box = self.options.get(OPT_BOX)
-        if target == "tv" and command in TV_KEYS:
+        entity = (self.options.get(OPT_TV) or {}).get("entity")
+        if target == "tv" and entity and command in ENTITY_COMMANDS:  # the core Samsung TV integration's player
+            await self._tv_entity(entity, command)
+        elif target == "tv" and command == "power" and not self.tv.available and self.tv.mac:
+            await self.tv.wake()  # a WebSocket key cannot reach a TV that is off
+        elif target == "tv" and command in TV_KEYS:
             await self.tv.send_key(TV_KEYS[command])
             if command in ("play", "pause"):
                 self._paused = command == "pause"
@@ -211,6 +217,26 @@ class Hub:
             await self.pc_coord.remote(PC_KEYS[command])
         else:
             raise self._unsupported(command, target)
+
+    async def _tv_entity(self, entity: str, command: str) -> None:
+        st = self.hass.states.get(entity)
+        if command == "power" and (not st or st.state in OFF_STATES):
+            await self.activity.power_on()  # turn_on when the entity supports it, else Wake-on-LAN
+            return
+        data = {"entity_id": entity}
+        if command == "power":
+            service = "turn_off"
+        elif command == "mute":
+            service, data["is_volume_muted"] = "volume_mute", not (st and st.attributes.get("is_volume_muted"))
+        else:
+            service = command  # volume_up / volume_down
+        await self.hass.services.async_call("media_player", service, data, blocking=True)
+
+    async def set_volume(self, level: int) -> None:
+        if not (entity := (self.options.get(OPT_TV) or {}).get("entity")):
+            raise ServiceValidationError("Setting the volume needs the TV media player (Configure › TV)")
+        await self.hass.services.async_call(
+            "media_player", "volume_set", {"entity_id": entity, "volume_level": level / 100}, blocking=True)
 
     def _server_url(self, app: str) -> str | None:
         server = APP_CATALOG.get(app, {}).get("server")

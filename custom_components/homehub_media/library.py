@@ -16,6 +16,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_interval
 
+from .catalog import YT_ID_RE
+
 _LOGGER = logging.getLogger(__name__)
 TIMEOUT = aiohttp.ClientTimeout(total=10)
 ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
@@ -167,6 +169,23 @@ class PlexServer(_Server):
             _LOGGER.debug("plex play failed: %s", err)  # caller retries while the TV app starts
             return False
         return True
+
+
+class YouTubeArt(_Server):
+    """Thumbnails of YouTube ambience visuals (no credentials involved)."""
+
+    name = "youtube"
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        super().__init__(hass, "https://i.ytimg.com", {}, None)
+
+    async def fetch_art(self, key: str) -> tuple[bytes, str]:
+        if not YT_ID_RE.fullmatch(key):
+            raise ServiceValidationError("Invalid art key")
+        try:
+            return await self._req(f"/vi/{key}/maxresdefault.jpg", accept="image/*")
+        except HomeAssistantError:  # 404: the video has no HD thumbnail
+            return await self._req(f"/vi/{key}/hqdefault.jpg", accept="image/*")
 
 
 class JellyfinServer(_Server):
