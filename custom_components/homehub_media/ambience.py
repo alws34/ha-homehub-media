@@ -7,13 +7,16 @@ import os
 import random
 import secrets
 import time
+import unicodedata
 from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from urllib.parse import quote
 
+import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.network import get_url
 from homeassistant.util import dt as dt_util
@@ -45,6 +48,7 @@ SNAPSHOT_ID = "homehub_media_snapshot"
 STATE_PATH = "/api/homehub_media/page/state"
 STATE_URL_HOURS = 2  # the page's state URL signature; media URLs keep the default 24 h
 HEALTH_SECS, PAGE_GRACE_SECS, PAGE_TIMEOUT_SECS, FADE_SECS, ENTER_DELAY_SECS = 30, 60, 45, 60, 4
+OEMBED, OEMBED_SECS, NAME_MAX = "https://www.youtube.com/oembed", 5, 80
 IDLE_APP_STATES = {"", "unknown", "home", "Home", "TV", "off"}
 _DIRS = {"visual": VIDEO_DIR, "soundtrack": SOUNDTRACK_DIR}
 _SERVER_ONLY = {"path", "preview_path", "url", "youtube_id"}
@@ -231,12 +235,18 @@ class AmbienceManager:
     def _youtube_app(self) -> str:
         return self._hub.apps.get("youtube") or APP_CATALOG["youtube"]["ids"][0]
 
-    async def start(self, mode_id: str, composition: dict | None = None, *, shuffle: bool = True) -> None:
+    async def start(self, mode_id: str, composition: dict | None = None, *, shuffle: bool = True,
+                    video: str | None = None) -> None:
+        """`video`: play this catalog visual instead of the mode's own pick."""
         mode = self._mode(mode_id)
         try:
             comp = self.composition(mode_id) if composition is None else cat.validate_composition(composition)
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
+        if video is not None:
+            if all(i["id"] != video for i in self._catalog["visuals"]):
+                raise ServiceValidationError(f"Unknown video: {video}")
+            comp, shuffle = {**comp, "visual": video, "visual_enabled": True}, False
         comp = self._with_visual(comp, shuffle)
         yt = None if mode["lights_only"] else self._youtube_id(comp)
         player = "tv" if yt else self._backend  # YouTube plays in the TV's app whatever the backend
@@ -411,14 +421,39 @@ class AmbienceManager:
         comp = self.composition(mode_id)
         return {comp["visual"], *comp["visuals"]}
 
+    async def _video_name(self, video: dict, taken: dict[str, str]) -> str:
+        """The given name, else the video's YouTube title (its id when that fails), fit for name=link."""
+        if name := (video.get("name") or "").strip():
+            return name
+        vid = cat.youtube_id(video["url"])
+        try:
+            async with async_get_clientsession(self.hass).get(
+                    OEMBED, params={"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"},
+                    timeout=aiohttp.ClientTimeout(total=OEMBED_SECS)) as resp:
+                resp.raise_for_status()
+                title = (await resp.json()).get("title")
+        except (aiohttp.ClientError, TimeoutError, ValueError, AttributeError) as err:
+            _LOGGER.debug("No YouTube title for %s: %s", vid, err)
+            title = None
+        clean = "".join(" " if c == "=" or unicodedata.category(c)[0] == "C" else c for c in str(title or ""))
+        name = " ".join(clean.split())[:NAME_MAX].strip() or vid
+        if name in taken and cat.youtube_id(taken[name]) != vid:  # never take over another video's name
+            name = f"{name[:NAME_MAX - 14].strip()} ({vid})"
+        return name
+
     async def set_mode_videos(self, mode_id: str, videos: list[dict]) -> None:
         """The mode's visuals become exactly these YouTube videos (added to or changed in the options' list by
-        name); the videos only this mode used are dropped from the list."""
+        name; a video without a name gets its YouTube title); the videos only this mode used are dropped."""
         self._mode(mode_id)
-        new = {v["name"].strip(): v["url"].strip() for v in videos}
+        amb = self._hub.options.get(OPT_AMBIENCE) or {}
+        taken = {**(amb.get("youtube") or {}), **{v["name"].strip(): v["url"] for v in videos if v.get("name")}}
+        try:
+            names = await asyncio.gather(*(self._video_name(v, taken) for v in videos))
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        new = {name: v["url"].strip() for name, v in zip(names, videos, strict=True)}
         if len(new) < len(videos):
             raise ServiceValidationError("Each video needs its own name")
-        amb = self._hub.options.get(OPT_AMBIENCE) or {}
         merged = {**(amb.get("youtube") or {}), **new}  # changed names keep their place, new ones go last
         files = {v["id"] for v in self._catalog["visuals"] if v["source_type"] != "youtube"}
         try:
@@ -435,6 +470,8 @@ class AmbienceManager:
         visuals = [ids[name] for name in new]
         await self.save_mode(mode_id, {**self.composition(mode_id), "visual": next(iter(visuals), None),
                                        "visuals": visuals, "visual_enabled": bool(visuals)})
+        if mode_id == self.mode and self._comp:  # the running mode's next pick (and the card's list) follow
+            self._comp = {**self._comp, "visuals": visuals}
         try:
             await self.refresh_catalog()
         except HomeAssistantError as err:  # the videos are saved; only the file scan failed
@@ -570,6 +607,7 @@ class AmbienceManager:
         modes = self.modes()
         return {
             "backend": self._backend, "mode": self.mode, "error": self.error,
+            "visual": self._comp["visual"] if self.uses_media and self._comp["visual_enabled"] else None,
             "sleep_until": self.sleep_until.isoformat() if self.sleep_until else None, "auto": self.auto,
             "daypart_mode": self.daypart_mode(),
             "modes": [{"id": m["id"], "name": m["name"], "icon": m["icon"], "lights_only": m["lights_only"],

@@ -224,8 +224,7 @@ async def test_set_mode_videos(hass, setup_entry, hass_read_only_user):
         await call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": videos}, blocking=True,
                    context=Context(user_id=hass_read_only_user.id))
     for bad, error in (([{"name": "Bad", "url": "https://example.com/x"}], "not a YouTube video link"),
-                       ([videos[1], {**videos[1], "name": "Fire "}], "its own name"),
-                       ([{"name": " ", "url": "fireFIREfir"}], "needs a name")):
+                       ([videos[1], {**videos[1], "name": "Fire "}], "its own name")):
         with pytest.raises(ServiceValidationError, match=error):
             await call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": bad}, blocking=True)
     for bad in ([{"name": "a=b", "url": "fireFIREfir"}], [{"name": "a"}]):
@@ -251,3 +250,35 @@ async def test_set_mode_videos(hass, setup_entry, hass_read_only_user):
     comp = amb.composition("chill")
     assert (comp["visual"], comp["visuals"], comp["visual_enabled"]) == (None, [], False)
     assert list(setup_entry.options["ambience"]["youtube"]) == ["Fire", "Spare"]
+
+
+async def test_ambience_start_video_goes_to_the_manager(hass, setup_entry):
+    amb = setup_entry.runtime_data.ambience
+    amb.start = AsyncMock()
+    await hass.services.async_call(DOMAIN, "ambience_start", {"mode": "chill", "video": "fire"}, blocking=True)
+    amb.start.assert_awaited_once_with("chill", video="fire")
+    await hass.services.async_call(DOMAIN, "ambience_start", {"mode": "chill"}, blocking=True)
+    amb.start.assert_awaited_with("chill", video=None)
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, "ambience_start", {"mode": "chill", "video": "Bad id"}, blocking=True)
+
+
+OEMBED = "https://www.youtube.com/oembed"
+
+
+async def test_set_mode_videos_names_from_youtube(hass, setup_entry, aioclient_mock):
+    hub = setup_entry.runtime_data
+    hub.options["ambience"] = {**hub.options["ambience"], "youtube": {"Taken": "spareSPAREs"}}
+    query = lambda vid: {"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"}
+    aioclient_mock.get(OEMBED, params=query("newNEWnewNE"), json={"title": " Cozy = fire\n" + "x" * 100})
+    aioclient_mock.get(OEMBED, params=query("fire2FIRE2f"), status=404)
+    aioclient_mock.get(OEMBED, params=query("textTEXTtex"), text="not json")
+    videos = [{"url": "https://youtu.be/newNEWnewNE"}, {"url": "fire2FIRE2f"},
+              {"url": "takenTAKEN1"}, {"url": "textTEXTtex"}, {"url": "spareSPAREs"}]
+    aioclient_mock.get(OEMBED, params=query("takenTAKEN1"), json={"title": "Taken"})
+    aioclient_mock.get(OEMBED, params=query("spareSPAREs"), json={"title": "Taken"})
+    await hass.services.async_call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": videos}, blocking=True)
+    names = list(setup_entry.options["ambience"]["youtube"])
+    assert names[1:] == [("Cozy fire " + "x" * 100)[:80], "fire2FIRE2f", "Taken (takenTAKEN1)", "textTEXTtex"]
+    assert names[0] == "Taken"  # the same video under its existing name: kept, not renamed
+    assert all(len(n) <= 80 and "=" not in n and "\n" not in n for n in names)

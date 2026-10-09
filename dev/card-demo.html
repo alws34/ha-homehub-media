@@ -10,7 +10,8 @@
   A fake `hass` emits a K4 snapshot, answers the catalog/library websocket calls and
   mutates the snapshot on service calls. ha-card and ha-icon are stubbed.
   Query params (for screenshots): theme=light|dark, tab=remote|ambience|library, edit=<mode id>,
-  target=tv|box|pc, touchpad=1, drawer=1, open=1, w=<card px>, shot=1 (hide dev chrome).
+  target=tv|box|pc, touchpad=1, drawer=1, open=1, w=<card px>, shot=1 (hide dev chrome),
+  amb=off (nothing playing), backend=pc (ambience on the media PC), tvonly=1 (no box or PC).
 -->
 <style>
   :root, .light {
@@ -41,7 +42,8 @@
     position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; transition: .2s; pointer-events: none;
     padding: 12px 18px; border-radius: 8px; background: #323232; color: #fff; box-shadow: 0 4px 16px rgba(0, 0, 0, .3); z-index: 10;
   }
-  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  #toast button { margin-left: 12px; border: 0; background: none; color: #8bd0ff; font: inherit; font-weight: 600; cursor: pointer; }
   body.shot .bar, body.shot #log { display: none; }
 </style>
 </head>
@@ -127,11 +129,25 @@ const SOUNDTRACKS = [
   ["crackling_fire", "Crackling Fire", false, 3600],
   ["forest_birds", "Forest Birds", false, 2700],
 ];
+// YouTube videos per mode: [id, title, palette index into VISUALS]
+const YT = {
+  fireplace: [["modern_glass_fireplace", "Modern Glass Fireplace", 0], ["fireplace_evenings", "Fireplace Evenings of Calm", 0], ["fireplace_10_hours", "Fireplace 10 Hours 4K", 0]],
+  dinner: [["dream_aquarium", "Dream Aquarium 4K", 1], ["flickering_candles", "Flickering Candles", 2]],
+  reading: [["rainy_nyc_window", "Rainy NYC Window View", 4], ["cozy_library_rain", "Cozy Library Room Rain", 2]],
+  game_night: [["blurry_neon", "Blurry Neon Motion", 3], ["abstract_liquid", "Abstract Liquid Screensaver", 3]],
+  chill: [["starscapes", "8 Hours of Starscapes", 6], ["shooting_stars", "5K Shooting Stars", 6], ["forests_above", "Forests from Above", 5]],
+  cat_tv: [["birds_squirrels", "Birds, Chipmunks & Squirrels", 5], ["cat_tv_birds", "Cat TV Birds & Squirrels", 5]],
+  starry_night: [["night_sky_starfield", "Night Sky Starfield", 6]],
+};
+const ytVisual = (id, title, i, n = 0) => ({
+  id, kind: "visual", title, source_type: "youtube", live: false, duration: null, favorite: false,
+  link: `https://youtu.be/${(id + "xxxxxxxxxxx").slice(0, 11)}`, preview: scene(VISUALS[i][2], VISUALS[i][3].map(([x, y, r, c]) => [(x + n * 90) % 640, y, r, c])),
+});
 const catalog = {
-  visuals: VISUALS.map(([id, title, bg, glows, favorite]) => ({
-    id, kind: "visual", title, source_type: "file", live: id === "cat_tv", duration: id === "cat_tv" ? null : 1800 + title.length * 60,
+  visuals: [...VISUALS.map(([id, title, bg, glows, favorite]) => ({
+    id: `file_${id}`, kind: "visual", title, source_type: "file", live: id === "cat_tv", duration: id === "cat_tv" ? null : 1800 + title.length * 60,
     favorite, preview: scene(bg, glows),
-  })),
+  })), ...Object.values(YT).flatMap((vids) => vids.map(([id, title, i], n) => ytVisual(id, title, i, n)))],
   soundtracks: SOUNDTRACKS.map(([id, title, live, duration], i) => ({
     id, kind: "soundtrack", title, source_type: live ? "stream" : "file", live, duration, favorite: i === 2,
     preview: id === "crackling_fire" ? scene(["#1a0a05", "#3b1206"], [[320, 200, 120, "#ff7a1a"]]) : null,
@@ -161,8 +177,8 @@ const MODES = [
   ["chill", "Chill", "mdi:sofa", false], ["starry_night", "Starry Night", "mdi:weather-night", false],
   ["movie_time", "Movie Time", "mdi:movie-open", true], ["cat_tv", "Cat TV", "mdi:cat", false],
 ];
-const comp = (visual, soundtrack, mix) => ({
-  visual, visual_enabled: !!visual, video_loop: true, video_random_start: true, original_volume: 100 - mix,
+const comp = (visuals, soundtrack, mix) => ({
+  visual: visuals[0] ?? null, visuals, visual_enabled: visuals.length > 0, video_loop: true, video_random_start: true, original_volume: 100 - mix,
   soundtrack, soundtrack_loop: true, soundtrack_random_start: true, soundtrack_volume: mix,
 });
 const nowPlaying = {
@@ -179,15 +195,18 @@ const snap = {
     ["twitch", "Twitch", false], ["paramount_plus", "Paramount+", false], ["browser", "Browser"],
   ].map(([key, name, installed = true]) => ({ key, name, installed })),
   ambience: {
-    backend: "tv", mode: "dinner", error: null, sleep_until: new Date(Date.now() + 42 * 60000).toISOString(), auto: false, daypart_mode: "chill",
+    backend: q.get("backend") || "tv", mode: "fireplace", visual: "modern_glass_fireplace", error: null,
+    sleep_until: new Date(Date.now() + 42 * 60000).toISOString(), auto: false, daypart_mode: "chill",
     modes: MODES.map(([id, name, icon, lights_only]) => ({ id, name, icon, lights_only, lighting: true, flicker: id === "fireplace" })),
-    compositions: { dinner: comp("aquarium", "jazz_cafe", 70), fireplace: comp("fireplace", "crackling_fire", 40), chill: comp("rain", "lofi_beats", 60) },
+    compositions: Object.fromEntries(MODES.map(([id]) => [id, comp((YT[id] || []).map(([v]) => v), id === "dinner" ? "jazz_cafe" : null, 40)])),
   },
   now_playing: [nowPlaying],
   servers: ["plex", "jellyfin"],
   pc: { clients: ["jellyfin", "plex", "sonarr", "radarr"], active: null },
 };
 if (q.has("target")) snap.activity.current = q.get("target");
+if (q.get("amb") === "off") Object.assign(snap.ambience, { mode: "off", visual: null, sleep_until: null });
+if (q.get("tvonly") === "1") Object.assign(snap.targets, { box: false, pc: false });
 
 // ---------- fake hass ----------
 const subs = new Set();
@@ -228,9 +247,31 @@ const services = {
   channel() {},
   pc_open({ client }) { snap.pc.active = client; snap.activity.current = "pc"; },
   pc_close() { snap.pc.active = null; },
-  ambience_start({ mode }) { snap.ambience.mode = mode; snap.ambience.auto = false; },
-  ambience_stop() { snap.ambience.mode = "off"; snap.ambience.auto = false; snap.ambience.sleep_until = null; },
-  ambience_auto() { snap.ambience.mode = snap.ambience.daypart_mode; snap.ambience.auto = true; },
+  ambience_start({ mode, video }) {
+    const c = snap.ambience.compositions[mode];
+    if (video && !catalog.visuals.some((v) => v.id === video)) return fail(`Unknown video: ${video}`);
+    const pool = c?.visuals?.length ? c.visuals : [c?.visual].filter(Boolean);
+    Object.assign(snap.ambience, { mode, visual: video || pool[Math.floor(Math.random() * pool.length)] || null });
+  },
+  ambience_stop() { Object.assign(snap.ambience, { mode: "off", visual: null, sleep_until: null }); },
+  ambience_auto() { snap.ambience.mode = snap.ambience.daypart_mode; },
+  async set_mode_videos({ mode, videos }) {
+    await wait(500);  // the backend asks YouTube for missing names
+    const ids = [];
+    for (const { name, url } of videos) {
+      const vid = (url.match(/(?:v=|youtu\.be\/|shorts\/|live\/)([\w-]{11})/) || url.match(/^([\w-]{11})$/) || [])[1];
+      if (!vid) return fail(`not a YouTube video link: ${url}`);
+      const yt = catalog.visuals.filter((x) => x.source_type === "youtube");
+      let v = yt.find((x) => x.title === name) || yt.find((x) => x.link === url);
+      if (!v) {
+        v = ytVisual(`yt_${vid.toLowerCase()}`, name || `YouTube title of ${vid}`, catalog.visuals.length % VISUALS.length);
+        catalog.visuals.push(v);
+      }
+      Object.assign(v, { link: url, title: name || v.title });
+      ids.push(v.id);
+    }
+    Object.assign(snap.ambience.compositions[mode], { visual: ids[0] ?? null, visuals: ids, visual_enabled: ids.length > 0 });
+  },
   ambience_update() {},
   ambience_sleep_timer({ minutes }) {
     snap.ambience.sleep_until = minutes ? new Date(Date.now() + minutes * 60000).toISOString() : null;
@@ -250,6 +291,7 @@ const services = {
 
 const hass = {
   themes: { darkMode: dark },
+  entities: { "switch.homehub_media_auto_ambience": { entity_id: "switch.homehub_media_auto_ambience", platform: "homehub_media", translation_key: "auto_ambience" } },
   connection: {
     subscribeMessage(cb, msg) {
       if (msg.type !== "homehub_media/subscribe") return Promise.reject({ code: "unknown_command", message: "Unknown command" });
@@ -267,6 +309,7 @@ const hass = {
   },
   async callService(domain, service, data = {}) {
     log(`${domain}.${service} ${JSON.stringify(data)}`);
+    if (domain === "switch") { snap.ambience.auto = service === "turn_on"; emit(); return; }
     const fn = services[service];
     if (domain !== "homehub_media" || !fn) throw { code: "service_not_found", message: `Unknown service ${domain}.${service}` };
     await wait(60);
@@ -283,7 +326,12 @@ setInterval(() => {  // the backend re-polls sessions every 10 s
 let toastTimer;
 document.addEventListener("hass-notification", (e) => {
   const t = $("#toast");
-  t.textContent = e.detail.message;
+  const { message, action } = e.detail;
+  t.textContent = message;
+  if (action) {
+    const b = Object.assign(document.createElement("button"), { textContent: action.text, onclick: () => { t.classList.remove("show"); action.action(); } });
+    t.append(" ", b);
+  }
   t.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove("show"), 3000);

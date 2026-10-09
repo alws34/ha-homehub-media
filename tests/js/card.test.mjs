@@ -10,7 +10,7 @@ const ctx = { window: { __HOMEHUB_TEST__: true, customCards: [] }, customElement
               setTimeout, clearTimeout, performance };
 ctx.window.window = ctx.window;
 vm.createContext(ctx); vm.runInContext(src, ctx);
-const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeVideos, videoIds } = ctx.window.__homehubTest;
+const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeIds, nextId, modeVideos } = ctx.window.__homehubTest;
 const plain = (v) => JSON.parse(JSON.stringify(v));  // values from the card's realm, for deepStrictEqual
 
 test("esc neutralises markup", () => {
@@ -157,13 +157,21 @@ test("volume slider sends one debounced set_volume", async () => {
   await new Promise((r) => setTimeout(r, 300));
   assert.deepEqual(plain(calls), [["set_volume", { level: 42 }]]);
 });
-test("mode videos: the mode's YouTube visuals as rows, and their ids back by name", () => {
+test("mode videos: the rotation in order (else the one visual), its YouTube visuals as rows", () => {
   const visuals = [{ id: "rain", source_type: "file", title: "Rain" },
     { id: "fire", source_type: "youtube", title: "Fire", link: "fireFIREfir", preview: "/p/fire" },
     { id: "sea", source_type: "youtube", title: "Sea", link: "https://youtu.be/seaSEAseaSE", preview: "/p/sea" }];
+  // the playing (random) visual does not reorder the list
+  assert.deepEqual(plain(modeIds({ visual: "sea", visuals: ["rain", "fire", "sea"] })), ["rain", "fire", "sea"]);
+  assert.deepEqual(plain(modeIds({ visual: "sea", visuals: [] })), ["sea"]);
+  assert.deepEqual(plain(modeIds(undefined)), []);
   assert.deepEqual(plain(modeVideos({ visual: "sea", visuals: ["rain", "fire", "sea"] }, visuals)), [
-    { name: "Sea", url: "https://youtu.be/seaSEAseaSE", preview: "/p/sea" }, { name: "Fire", url: "fireFIREfir", preview: "/p/fire" }]);
-  assert.deepEqual(plain(modeVideos({ visual: null, visuals: [] }, visuals)), []);
+    { id: "fire", name: "Fire", url: "fireFIREfir", preview: "/p/fire" },
+    { id: "sea", name: "Sea", url: "https://youtu.be/seaSEAseaSE", preview: "/p/sea" }]);
   assert.deepEqual(plain(modeVideos({ visual: "fire" }, undefined)), []);  // catalog not loaded
-  assert.deepEqual(plain(videoIds([{ name: " Fire " }, { name: "Rain" }, { name: "Sea" }], visuals)), ["fire", "sea"]);
+});
+test("next video wraps, and starts from the first when the playing one is not in the list", () => {
+  assert.equal(nextId(["a", "b", "c"], "b"), "c");
+  assert.equal(nextId(["a", "b", "c"], "c"), "a");
+  assert.equal(nextId(["a", "b"], null), "a");
 });
