@@ -196,6 +196,8 @@ async def test_pc_keeps_secrets_and_removal_resets_backend(hass, aioclient_mock)
     public = {k: v for k, v in pc.items() if "token" not in k}
     result = await _submit(hass, result, {**public, "clients": ["My App"]})
     assert result["errors"] == {"clients": "invalid_client"}
+    result = await _submit(hass, result, {**public, "coord_port": 8099})  # new port: that token must be re-entered
+    assert result["errors"] == {"coord_token": "secret_required"} and aioclient_mock.call_count == 0
     result = await _submit(hass, result, public)  # blank tokens keep the saved ones
     assert [c[3]["Authorization"] for c in aioclient_mock.mock_calls] == ["Bearer a", "Bearer c"]
     result = await _submit(hass, result, {"next_step_id": "pc"})
@@ -211,9 +213,50 @@ async def test_keyboard_step_keeps_saved_key(hass, entry):
     result = await _submit(hass, result, {"host": "kb.lan", "key": "k1"})
     result = await _submit(hass, result, {"next_step_id": "keyboard"})
     assert _schema(result, "host")[0] == "kb.lan" and _schema(result, "key")[0] is None
+    result = await _submit(hass, result, {"host": "kb2.lan"})
+    assert result["errors"] == {"key": "secret_required"}
     result = await _submit(hass, result, {"host": "kb.lan"})
     await _save(hass, result)
     assert entry.options["keyboard"] == {"host": "kb.lan", "key": "k1"}
+
+
+@pytest.fixture
+def servers_entry(hass):
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA, options={"servers": {
+        "plex": {"url": PLEX, "token": "old", "player": None},
+        "jellyfin": {"url": JF, "api_key": "oldkey", "user_id": "u1", "player": None}}})
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_plex_blank_token_kept_only_for_same_origin(hass, servers_entry, aioclient_mock):
+    aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", json={"MediaContainer": {}})
+    result = await _open(hass, servers_entry, "servers", "plex")
+    assert _schema(result, "url")[0] == PLEX and _schema(result, "token")[0] is None
+    for moved in ("http://other.local:32400", "https://plex.local:32400", "http://plex.local:32401"):
+        result = await _submit(hass, result, {"url": moved})
+        assert result["errors"] == {"token": "secret_required"}
+    assert aioclient_mock.call_count == 0  # the saved token never went to another origin
+    result = await _submit(hass, result, {"url": f"{PLEX}/"})  # same origin, different path
+    await _save(hass, result)
+    assert aioclient_mock.mock_calls[0][3]["X-Plex-Token"] == "old"
+    assert servers_entry.options["servers"]["plex"]["token"] == "old"
+
+
+async def test_jellyfin_blank_key_kept_only_for_same_origin(hass, servers_entry, aioclient_mock):
+    aioclient_mock.get(f"{JF}/Users", json=[{"Name": "alon", "Id": "u1"}])
+    aioclient_mock.get(f"{JF}/UserItems/Resume", json={"Items": []})
+    result = await _open(hass, servers_entry, "servers", "jellyfin")
+    assert _schema(result, "api_key")[0] is None
+    result = await _submit(hass, result, {"url": "http://jf2.local:8096"})
+    assert result["errors"] == {"api_key": "secret_required"} and aioclient_mock.call_count == 0
+    result = await _submit(hass, result, {"url": JF})
+    assert result["step_id"] == "jellyfin_user"
+    assert aioclient_mock.mock_calls[0][3]["Authorization"] == 'MediaBrowser Token="oldkey"'
+    result = await _submit(hass, result, {"user_id": "u1"})
+    await _save(hass, result)
+    assert servers_entry.options["servers"]["jellyfin"]["api_key"] == "oldkey"
+    assert servers_entry.options["servers"]["plex"]["token"] == "old"  # sibling untouched
 
 
 async def test_servers_invalid_auth(hass, entry, aioclient_mock):
@@ -261,7 +304,7 @@ async def test_assistant_lists_models(hass, entry):
         result = await _submit(hass, result, {"provider": "claude"})
         assert result["step_id"] == "assistant_auth"
         result = await _submit(hass, result, {})
-        assert result["errors"] == {"api_key": "api_key_required"}
+        assert result["errors"] == {"api_key": "secret_required"}
         result = await _submit(hass, result, {"api_key": "bad"})
         assert result["errors"] == {"base": "invalid_auth"}
         result = await _submit(hass, result, {"api_key": "sk"})
@@ -307,6 +350,17 @@ async def test_modes_add_edit_delete(hass, entry):
                                     "flicker": ["light.a"], "lights_only": False}
     assert modes["dinner"] == {"id": "dinner", "name": "Supper", "icon": "mdi:food", "scene": "scene.dinner",
                                "flicker": [], "lights_only": True}
+
+
+async def test_default_modes_are_copied(hass):
+    entry = MockConfigEntry(domain=DOMAIN, data=DATA, options={})
+    entry.add_to_hass(hass)
+    result = await _open(hass, entry, "modes")
+    result = await _submit(hass, result, {"mode": "dinner"})
+    result = await _submit(hass, result, {"name": "Supper", "icon": "mdi:food"})
+    await _save(hass, result)
+    assert DEFAULT_MODES[1]["name"] == "Dinner"
+    assert not any(a is b for a, b in zip(entry.options["modes"], DEFAULT_MODES))
 
 
 async def test_dayparts_ambience_apps(hass, entry):

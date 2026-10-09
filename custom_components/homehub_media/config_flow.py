@@ -181,8 +181,22 @@ def _input(raw: dict) -> dict:
 
 
 def _public(saved: dict | None) -> dict:
-    """Saved values minus secrets: keys never go back to the browser, and a blank secret field keeps the saved one."""
+    """Saved values minus secrets: keys never go back to the browser (a blank field may keep them, see _secret)."""
     return {k: v for k, v in (saved or {}).items() if k not in SECRETS}
+
+
+def _origin(url: str | None) -> tuple | None:
+    """(scheme, host, port) of a URL."""
+    try:
+        parts = urlsplit(url or "")
+        return parts.scheme, parts.hostname, parts.port or {"http": 80, "https": 443}.get(parts.scheme)
+    except ValueError:
+        return None
+
+
+def _secret(typed: str | None, saved: dict, key: str, origin: Any, saved_origin: Any) -> str | None:
+    """The typed secret, else the saved one only if it was for this same origin; None = ask for it again."""
+    return typed or (saved.get(key) if origin == saved_origin else None) or None
 
 
 async def _probe(call: Awaitable) -> tuple[Any, str | None]:
@@ -348,13 +362,16 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
                      self.hass.config_entries.async_entries("plex", include_ignore=False)), None) or {}
         if user_input is not None:
             if user_input.get("prefill") and core:  # the core entry is read only on the user's explicit request
-                url, token = core.get("url"), core.get("token", "")
+                url, token = core.get("url"), core.get("token")
             else:
-                url, token = user_input.get("url"), user_input.get("token") or saved.get("token", "")
+                url = user_input.get("url")
+                token = _secret(user_input.get("token"), saved, "token", _origin(url), _origin(saved.get("url")))
             if not url:
                 return self._set_server("plex", None)
             if not _url_ok(url):
                 errors["url"] = "invalid_url"
+            elif not token:
+                errors["token"] = "secret_required"
             else:
                 _, err = await _probe(library.PlexServer(self.hass, url, token, None).continue_watching())
                 if not err:
@@ -370,12 +387,14 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
         if user_input is not None:
             if not (url := user_input.get("url")):
                 return self._set_server("jellyfin", None)
+            api_key = _secret(user_input.get("api_key"), saved, "api_key", _origin(url), _origin(saved.get("url")))
             if not _url_ok(url):
                 errors["url"] = "invalid_url"
+            elif not api_key:
+                errors["api_key"] = "secret_required"
             else:
-                self._pending = {"url": url, "api_key": user_input.get("api_key") or saved.get("api_key", "")}
-                users, err = await _probe(library.JellyfinServer(self.hass, url, self._pending["api_key"], "",
-                                                                 None).users())
+                self._pending = {"url": url, "api_key": api_key}
+                users, err = await _probe(library.JellyfinServer(self.hass, url, api_key, "", None).users())
                 if not err:
                     self._choices = [{"value": u["id"], "label": u["name"]} for u in users]
                     return await self.async_step_jellyfin_user()
@@ -419,14 +438,17 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
             except vol.Invalid:
                 clients = None
             value = {"host": host, "ambient_port": int(user_input["ambient_port"]),
-                     "ambient_token": user_input.get("ambient_token") or saved.get("ambient_token", ""),
-                     "coord_port": int(user_input["coord_port"]),
-                     "coord_token": user_input.get("coord_token") or saved.get("coord_token", ""),
-                     "input": _input(user_input["input"]), "clients": clients}
+                     "coord_port": int(user_input["coord_port"]), "input": _input(user_input["input"]),
+                     "clients": clients}
+            for name, port in (("ambient_token", "ambient_port"), ("coord_token", "coord_port")):
+                value[name] = _secret(user_input.get(name), saved, name, (host, value[port]),
+                                      (saved.get("host"), saved.get(port)))
             if not _host_ok(host):
                 errors["host"] = "invalid_host"
             elif clients is None:
                 errors["clients"] = "invalid_client"
+            elif missing := [k for k in ("ambient_token", "coord_token") if not value[k]]:
+                errors = dict.fromkeys(missing, "secret_required")
             elif not (errors := self._input_errors(value["input"])):
                 ambient = pc.AmbientPlayerClient(self.hass, host, value["ambient_port"], value["ambient_token"])
                 coord = pc.CoordinatorClient(self.hass, host, value["coord_port"], value["coord_token"])
@@ -441,9 +463,13 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
         if user_input is not None:
             if not (host := (user_input.get("host") or "").strip()):
                 return self._set(OPT_KEYBOARD, None)
-            if _host_ok(host):
-                return self._set(OPT_KEYBOARD, {"host": host, "key": user_input.get("key") or saved.get("key", "")})
-            errors["host"] = "invalid_host"
+            key = _secret(user_input.get("key"), saved, "key", host, saved.get("host"))
+            if not _host_ok(host):
+                errors["host"] = "invalid_host"
+            elif not key:
+                errors["key"] = "secret_required"
+            else:
+                return self._set(OPT_KEYBOARD, {"host": host, "key": key})
         return self._form("keyboard", KEYBOARD_SCHEMA, user_input or _public(saved), errors)
 
     async def async_step_ambience(self, user_input: dict | None = None) -> ConfigFlowResult:
@@ -466,7 +492,7 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
                                                              "radio": _join(ambience.get("radio") or {}, "\n")}, errors)
 
     def _modes(self) -> list[dict]:
-        return self._options.get(OPT_MODES) or DEFAULT_MODES
+        return self._options.get(OPT_MODES) or deepcopy(DEFAULT_MODES)
 
     async def async_step_modes(self, user_input: dict | None = None) -> ConfigFlowResult:
         if user_input is not None:
@@ -535,13 +561,14 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
         errors: dict[str, str] = {}
         provider = self._pending["provider"]
         current = self._section(OPT_ASSISTANT)
-        same = current if current.get("provider") == provider else {}  # never reuse a key across providers
+        same = current.get("provider") == provider  # a saved key is never reused across providers
         if user_input is not None:
-            url, key = user_input.get("url"), user_input.get("api_key") or same.get("api_key")
+            url = user_input.get("url")
+            key = _secret(user_input.get("api_key"), current, "api_key", provider, current.get("provider"))
             if url is not None and not _url_ok(url):
                 errors["url"] = "invalid_url"
             elif provider != "ollama" and not key:
-                errors["api_key"] = "api_key_required"
+                errors["api_key"] = "secret_required"
             else:
                 try:
                     await assistant.ensure_sdk(self.hass, provider)
@@ -552,7 +579,8 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
                     self._pending.update(url=url, api_key=key)
                     return await self.async_step_assistant_model()
         schema = vol.Schema({vol.Required("url"): URL} if provider == "ollama" else {vol.Optional("api_key"): PASSWORD})
-        return self._form("assistant_auth", schema, user_input or _public(same) or {"url": OLLAMA_URL}, errors)
+        return self._form("assistant_auth", schema, user_input or (_public(current) if same else {"url": OLLAMA_URL}),
+                          errors)
 
     async def async_step_assistant_model(self, user_input: dict | None = None) -> ConfigFlowResult:
         if user_input is not None:
