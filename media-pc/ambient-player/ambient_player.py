@@ -1133,8 +1133,9 @@ class Handler(BaseHTTPRequestHandler):
     def _rejection(self) -> tuple[HTTPStatus, str] | None:
         """Guard order is part of the API: IP 403, Host 421, token 401, framing 411/400, JSON body 415."""
         chunked = "Transfer-Encoding" in self.headers
-        length = (self.headers.get("Content-Length") or "0").strip()
-        if chunked or (self.command == "GET" and length != "0"):
+        lengths = self.headers.get_all("Content-Length") or ["0"]
+        length = lengths[0].strip()
+        if chunked or len(lengths) > 1 or (self.command == "GET" and length != "0"):
             self.close_connection = True  # an unread body must never be parsed as the next request
         if not self.server.client_allowed(self.client_address[0]):
             return HTTPStatus.FORBIDDEN, "forbidden"
@@ -1143,6 +1144,8 @@ class Handler(BaseHTTPRequestHandler):
         presented = (self.headers.get("Authorization") or "").encode()
         if not hmac.compare_digest(presented, f"Bearer {self.server.auth_token}".encode()):
             return HTTPStatus.UNAUTHORIZED, "unauthorized"
+        if len(lengths) > 1:
+            return HTTPStatus.BAD_REQUEST, "invalid_content_length"
         if self.command in ("POST", "PUT", "PATCH"):
             if chunked:
                 return HTTPStatus.LENGTH_REQUIRED, "length_required"

@@ -73,6 +73,12 @@ class AuthTest(unittest.TestCase):
         self.assertEqual(self.req("POST", "/v2/play", {"Content-Type": "text/plain"},
                                   json.dumps({"visual": "rain"})), 415)
 
+    def test_duplicate_content_length_400(self):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as s:  # http.client can't repeat a header
+            s.sendall(f"POST /v2/play HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nAuthorization: Bearer {TOKEN}\r\n"
+                      "Content-Type: application/json\r\nContent-Length: 2\r\nContent-Length: 2\r\n\r\n{}".encode())
+            self.assertEqual(s.recv(64).split()[1], b"400")
+
     def test_unknown_media_is_a_code_not_a_message(self):
         status, body = request(self.port, "POST", "/v2/play", {"Content-Type": "application/json"},
                                json.dumps({"visual": "rain"}))
