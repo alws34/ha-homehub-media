@@ -151,6 +151,18 @@ async def test_catalog_signs_youtube_previews_and_hides_video_ids(hass, hass_ws_
     assert visual["preview"].startswith("/api/homehub_media/art/youtube/B5unCXpegAw?authSig=")
 
 
+@pytest.mark.parametrize(("service", "data"), [
+    ("ambience_update", {"visual": "../etc"}),
+    ("ambience_update", {"soundtrack": "x" * 65}),
+    ("save_mode", {"mode": "chill", "visuals": ["Rain"]}),
+    ("ambience_start", {"mode": "a" * 65}),
+    ("pc_open", {"client": "a" * 65}),
+])
+async def test_service_ids_are_bounded_at_the_schema(hass, setup_entry, service, data):
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(DOMAIN, service, data, blocking=True)
+
+
 async def test_visuals_through_the_service_schemas(hass, setup_entry):
     amb = setup_entry.runtime_data.ambience
     await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": ["rain", "fire", "rain"]},
@@ -161,7 +173,7 @@ async def test_visuals_through_the_service_schemas(hass, setup_entry):
     with pytest.raises(vol.Invalid):
         await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": [f"v{i}" for i in range(51)]},
                                        blocking=True)
-    with pytest.raises(ServiceValidationError):  # ids are checked by the manager
+    with pytest.raises(vol.Invalid):  # ids are checked at the schema, then again by the manager
         await hass.services.async_call(DOMAIN, "save_mode", {"mode": "chill", "visuals": ["../x"]}, blocking=True)
     amb.update = AsyncMock()
     await hass.services.async_call(DOMAIN, "ambience_update", {"visuals": ["fire", "rain"]}, blocking=True)
