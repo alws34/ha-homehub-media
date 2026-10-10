@@ -16,7 +16,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
-from .activity import OFF_STATES, ActivityManager
+from .activity import OFF_STATES, ActivityManager, call_service
 from .ambience import AmbienceManager
 from .const import (
     APP_CATALOG,
@@ -216,8 +216,8 @@ class Hub:
             if command in ("play", "pause"):
                 self._paused = command == "pause"
         elif target == "box" and box and command in BOX_KEYS:
-            await self.hass.services.async_call(
-                "remote", "send_command", {"entity_id": box["remote"], "command": BOX_KEYS[command]}, blocking=True)
+            await call_service(self.hass, "remote", "send_command",
+                               {"entity_id": box["remote"], "command": BOX_KEYS[command]})
         elif target == "pc" and self.pc_coord and command in PC_KEYS:
             await self.pc_coord.remote(PC_KEYS[command])
         else:
@@ -235,13 +235,13 @@ class Hub:
             service, data["is_volume_muted"] = "volume_mute", not (st and st.attributes.get("is_volume_muted"))
         else:
             service = command  # volume_up / volume_down
-        await self.hass.services.async_call("media_player", service, data, blocking=True)
+        await call_service(self.hass, "media_player", service, data)
 
     async def set_volume(self, level: int) -> None:
         if not (entity := (self.options.get(OPT_TV) or {}).get("entity")):
             raise ServiceValidationError("Setting the volume needs the TV media player (Configure › TV)")
-        await self.hass.services.async_call(
-            "media_player", "volume_set", {"entity_id": entity, "volume_level": level / 100}, blocking=True)
+        await call_service(self.hass, "media_player", "volume_set",
+                           {"entity_id": entity, "volume_level": level / 100})
 
     def _server_url(self, app: str) -> str | None:
         server = APP_CATALOG.get(app, {}).get("server")
@@ -326,8 +326,8 @@ class Hub:
     async def channel(self, number: str) -> None:
         if not (player := (self.options.get(OPT_BOX) or {}).get("media_player")):
             raise ServiceValidationError("Channels need the streaming box's media player entity")
-        await self.hass.services.async_call("media_player", "play_media", {
-            "entity_id": player, "media_content_type": "channel", "media_content_id": number}, blocking=True)
+        await call_service(self.hass, "media_player", "play_media", {
+            "entity_id": player, "media_content_type": "channel", "media_content_id": number})
 
     async def pc_open(self, client: str) -> None:
         if not self.pc_coord:

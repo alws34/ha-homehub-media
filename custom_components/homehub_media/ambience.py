@@ -23,6 +23,7 @@ from homeassistant.helpers.network import get_url
 from homeassistant.util import dt as dt_util
 
 from . import catalog as cat
+from .activity import call_service
 from .const import (
     APP_CATALOG,
     DEFAULT_DAYPARTS,
@@ -284,7 +285,7 @@ class AmbienceManager:
         self._hub.async_notify()
 
     async def _lights(self, mode: dict) -> None:
-        call = self.hass.services.async_call
+        call = partial(call_service, self.hass)  # bounded: this runs under the lock
         if not self._snapshot:
             ents, snap = list(mode["flicker"]), set()
             if mode["scene"] and (scene := self.hass.states.get(mode["scene"])):
@@ -293,11 +294,10 @@ class AmbienceManager:
                 state = self.hass.states.get(ent)
                 snap.update(state and state.attributes.get("entity_id") or [ent])
             if snap:
-                await call("scene", "create", {"scene_id": SNAPSHOT_ID, "snapshot_entities": sorted(snap)},
-                           blocking=True)
+                await call("scene", "create", {"scene_id": SNAPSHOT_ID, "snapshot_entities": sorted(snap)})
                 self._snapshot = True
         if mode["scene"]:
-            await call("scene", "turn_on", {"entity_id": mode["scene"]}, blocking=True)
+            await call("scene", "turn_on", {"entity_id": mode["scene"]})
         if mode["flicker"]:
             self._jobs.append(self.hass.async_create_background_task(
                 self._flicker(list(mode["flicker"])), "homehub_media_flicker"))
@@ -306,9 +306,8 @@ class AmbienceManager:
         while True:
             for pct, secs in FLICKER:
                 try:
-                    await self.hass.services.async_call(
-                        "light", "turn_on", {"entity_id": lights, "brightness_pct": pct, "transition": secs},
-                        blocking=True)
+                    await call_service(self.hass, "light", "turn_on",
+                                       {"entity_id": lights, "brightness_pct": pct, "transition": secs})
                 except HomeAssistantError as err:
                     _LOGGER.debug("Flicker step failed: %s", err)
                 await asyncio.sleep(secs)
@@ -379,8 +378,7 @@ class AmbienceManager:
         if restore_lights and self._snapshot:
             self._snapshot = False
             try:
-                await self.hass.services.async_call(
-                    "scene", "turn_on", {"entity_id": f"scene.{SNAPSHOT_ID}"}, blocking=True)
+                await call_service(self.hass, "scene", "turn_on", {"entity_id": f"scene.{SNAPSHOT_ID}"})
             except HomeAssistantError as err:
                 _LOGGER.warning("Could not restore lights: %s", err)
         self.mode = "off"

@@ -56,11 +56,11 @@ pure helpers      catalog.py (scanning, link parsing, composition validation) ·
 
 | System | Module | Transport | Timeout |
 |---|---|---|---|
-| Samsung TV remote | `tv.py` | WebSocket `wss://host:8002`, pairing token | connect 10 s |
+| Samsung TV remote | `tv.py` | WebSocket `wss://host:8002`, pairing token | connect 10 s, send 15 s |
 | Samsung TV apps / power state | `tv.py` | REST `http://host:8001/api/v2/` | 5 s |
-| YouTube on the TV | `tv.py` | DIAL `http://host:8080/ws/apps/YouTube` + YouTube Lounge (pyytlounge) | 5 s / 20 s start |
+| YouTube on the TV | `tv.py` | DIAL `http://host:8080/ws/apps/YouTube` + YouTube Lounge (pyytlounge) | 5 s / 20 s start / 5 s disconnect |
 | Wake-on-LAN | `tv.py` | UDP broadcast, executor | n/a |
-| Core Samsung TV integration | `activity.py`, `hub.py` | HA services on the configured `media_player` | n/a |
+| Core Samsung TV integration | `activity.py`, `hub.py` | HA services on the configured `media_player` (and box remote, lights) via `activity.call_service` | 15 s |
 | Plex / Jellyfin | `library.py` | HTTP(S) with token header | 10 s |
 | YouTube thumbnails / oEmbed | `library.py`, `ambience.py` | HTTPS to fixed YouTube hosts | 10 s / 5 s |
 | Media PC daemons | `pc.py` | HTTP + Bearer token | 10 s (play 30 s) |

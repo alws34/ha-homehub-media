@@ -1,6 +1,7 @@
 """Tests for the Plex / Jellyfin library client."""
 from __future__ import annotations
 
+import asyncio
 import base64
 from datetime import timedelta
 
@@ -10,6 +11,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
+from custom_components.homehub_media import library
 from custom_components.homehub_media.library import (
     ART_MAX,
     BODY_MAX,
@@ -331,3 +333,14 @@ async def test_json_size_is_capped(hass, aioclient_mock):
     aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", content=huge)
     with pytest.raises(HomeAssistantError, match="too large"):
         await PlexServer(hass, PLEX, "tok", None).continue_watching()
+
+
+async def test_plex_play_gives_up_on_a_hung_player(hass, aioclient_mock, monkeypatch):
+    monkeypatch.setattr(library, "PLAY_SECS", 0.05)
+    async def hang(call): await asyncio.Event().wait()
+    hass.services.async_register("media_player", "play_media", hang)
+    ent = er.async_get(hass).async_get_or_create("media_player", "plex", "uid1")
+    hass.states.async_set(ent.entity_id, "idle")
+    aioclient_mock.get(f"{PLEX}/identity", json={"MediaContainer": {"machineIdentifier": "m"}})
+    async with asyncio.timeout(5):
+        assert await PlexServer(hass, PLEX, "tok", None).play("123") is False  # the caller retries
