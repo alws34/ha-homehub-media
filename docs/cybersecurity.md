@@ -107,7 +107,11 @@ The secrets are:
 
 - **Every outbound request has a timeout.** Also bound any HA service call made while holding a lock, so a hung
   device or integration cannot hold the lock forever.
-- **Every response body read from a device or server is size-capped**:
+  A service call that runs past `activity.call_service`'s 15 s is cancelled, and so is the handler it runs (for
+  example a scene or a `turn_on` automation that takes longer). Accepted: light and TV calls normally finish well
+  under a second, and a hung integration must not hold the ambience lock or an activity switch.
+- **Every response body our code reads from a device or server is size-capped** (pyytlounge and the LLM SDKs read
+  their own responses; see section 9):
   - read through the bounded helper `library.read_capped` (every client uses it);
   - art is capped at 5 MB and checked against the image content-type allowlist before the body is read;
   - JSON and text responses are capped at 1 MB.
@@ -174,6 +178,7 @@ The secrets are:
 | The TV WebSocket uses TLS without certificate verification (samsungtvws `CERT_NONE`), and the token is part of the WS URL | Samsung TVs use self-signed certificates that cannot be pinned through the remote API. The token only controls the TV and can be revoked on the TV. The log filter redacts it. |
 | The YouTube Lounge token travels in pyytlounge's request URLs to YouTube | The Lounge protocol requires it and pyytlounge builds the requests. The requests go over HTTPS to YouTube only; the token only controls YouTube on this TV and is re-paired when it stops working. The log filter drops pyytlounge records that carry it. |
 | Media-PC, keyboard bridge and some Plex/Jellyfin traffic is plain HTTP on the LAN | These are LAN devices without TLS. Each uses its own token, the media PC has a mandatory firewall, and the README recommends HTTPS where it is available. |
+| pyytlounge and the LLM SDKs read response bodies without our 1 MB cap | Third-party libraries own those reads. The hosts are fixed (YouTube) or chosen by the admin (the LLM provider), the reads run under our timeouts (20 s YouTube start, 60 s LLM) and the subscription task is cancelled on stop and unload. |
 | Secrets are stored in plain text in HA's `.storage` | This is how Home Assistant stores config entries; protecting it is the host's job. |
 | Signed media URLs for the TV page last 24 h | The TV streams long files with range requests. The URLs are re-minted on every poll, and the page itself is bound to a 2-hour session. |
 | `ensure_sdk` installs the chosen LLM SDK from PyPI during setup | This is HA's standard requirements mechanism (`async_process_requirements`), only for the provider an admin picked. |
@@ -183,7 +188,7 @@ The secrets are:
 
 - **Runtime requirements** in `manifest.json` have lower bounds or exact pins. Test requirements are pinned exactly in
   `requirements_test.txt`.
-- **GitHub Actions** are pinned to a full commit SHA, with the tag in a comment.
+- **GitHub Actions** are pinned to a full commit SHA, with the branch or tag in a comment.
 - **CI runs** HACS validation, hassfest, ruff, the Python tests and the card tests on every push.
 - **Before every push**, scan the diff for secrets and real LAN addresses.
 

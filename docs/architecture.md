@@ -137,6 +137,9 @@ pure helpers      catalog.py (scanning, link parsing, composition validation) ·
   awaited before lights are restored or the entry unloads.
 - **Device I/O**: every await on a device or remote service has a timeout. A hung device must never hold a lock
   forever.
+  A service call that runs past `activity.call_service`'s 15 s is cancelled, and so is the handler it runs (for
+  example a scene or a `turn_on` automation that takes longer). Accepted: light and TV calls normally finish well
+  under a second, and a hung integration must not hold the ambience lock or an activity switch.
 
 ## Conventions
 
