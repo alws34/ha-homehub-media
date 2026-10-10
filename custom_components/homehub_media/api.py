@@ -19,7 +19,7 @@ from homeassistant.helpers.service import async_register_admin_service
 from .ambience import STATE_PATH
 from .const import ACTIVITIES, COMMANDS, DOMAIN, SIGNAL_UPDATE, TARGETS, TEXT_MAX
 from .hub import Hub, loaded_hub, sign
-from .library import ART_MAX, YouTubeArt
+from .library import ART_MAX
 
 ART_KEY_RE = re.compile(r"[A-Za-z0-9_=-]{1,512}")
 ART_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}  # never SVG/HTML from HA's origin
@@ -175,9 +175,8 @@ class ArtView(HomeAssistantView):
     url, name, requires_auth = "/api/homehub_media/art/{server}/{key}", "api:homehub_media:art", True
 
     async def get(self, request: web.Request, server: str, key: str) -> web.Response:
-        hass = request.app[KEY_HASS]
-        hub = loaded_hub(hass)
-        srv = hub and (YouTubeArt(hass) if server == "youtube" else hub.library and hub.library.server(server))
+        hub = loaded_hub(request.app[KEY_HASS])
+        srv = hub and hub.art_source(server, key)
         if not srv or not ART_KEY_RE.fullmatch(key):
             raise web.HTTPNotFound
         try:
