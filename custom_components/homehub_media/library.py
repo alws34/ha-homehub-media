@@ -36,6 +36,10 @@ class InvalidAuth(HomeAssistantError):
     """The server rejected the token / API key (HTTP 401/403)."""
 
 
+class Redirected(HomeAssistantError):
+    """The server answered 3xx; a token is never sent after it, so its final URL must be configured."""
+
+
 async def read_capped(resp: aiohttp.ClientResponse, limit: int = BODY_MAX) -> bytes:
     """The body, at most `limit` bytes (memory stays bounded without a Content-Length); ValueError past it."""
     if int(resp.headers.get("Content-Length") or 0) > limit:
@@ -89,7 +93,7 @@ class _Server:
                 allow_redirects=False,  # the token header must never follow a redirect to another host
             ) as resp:
                 if 300 <= resp.status < 400:
-                    raise HomeAssistantError(f"{self.name} {path}: the server redirected; set its final URL")
+                    raise Redirected(f"{self.name} {path}: the server redirected; set its final URL")
                 resp.raise_for_status()
                 image = accept.startswith("image/")
                 # checked before reading the body: never buffer or relay non-images through HA's origin
