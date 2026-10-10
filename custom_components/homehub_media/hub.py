@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -361,10 +362,14 @@ class Hub:
             raise ServiceValidationError(f"{name} is not configured")
         await self.launch_app(server)
         end = time.monotonic() + PLAY_TIMEOUT
-        while not await srv.play(item_id):
+        while True:  # each attempt gets what is left of the budget, so a hung player cannot outlast it
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(max(end - time.monotonic(), 0)):
+                    if await srv.play(item_id):
+                        return
             if time.monotonic() >= end:
                 raise HomeAssistantError(f"{name} did not start playing")
-            await asyncio.sleep(PLAY_RETRY)
+            await asyncio.sleep(min(PLAY_RETRY, end - time.monotonic()))
 
     # ---- K4 ----------------------------------------------------------------------------------------
 

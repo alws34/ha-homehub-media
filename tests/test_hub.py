@@ -192,6 +192,16 @@ async def test_play_library_item_retries_until_the_app_is_ready(hass):
         await hub.play_library_item("jellyfin", "abc")
 
 
+async def test_play_library_item_bounds_a_hung_attempt(hass, monkeypatch):
+    monkeypatch.setattr(hub_mod, "PLAY_TIMEOUT", 0.05)
+    hub = make_hub(hass)
+    async def hang(item_id): await asyncio.Event().wait()
+    hub.library = MagicMock(server=lambda name: MagicMock(play=hang))
+    async with asyncio.timeout(5):  # the whole budget, not one hung player call forever
+        with pytest.raises(HomeAssistantError, match="Jellyfin did not start playing"):
+            await hub.play_library_item("jellyfin", "abc")
+
+
 async def test_pc_open_stops_media_ambience_first(hass):
     hub = make_hub(hass)
     hub.ambience = MagicMock(uses_media=True, stop=AsyncMock())
