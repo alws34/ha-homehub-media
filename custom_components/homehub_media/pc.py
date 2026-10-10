@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib.parse import quote
 
 import aiohttp
@@ -15,6 +16,7 @@ _TIMEOUT = aiohttp.ClientTimeout(total=10)
 _PLAY_TIMEOUT = aiohttp.ClientTimeout(total=30)  # the player waits for HDMI and starts mpv before answering
 _REJECTED = {401: "Media PC rejected the token", 403: "Media PC rejected the token",
              421: "Media PC host name mismatch"}
+_CODE_RE = re.compile(r"[a-z0-9_]{1,40}")  # a 409's error code (e.g. unknown_client); any other text is not shown
 
 
 class PCError(HomeAssistantError):
@@ -42,8 +44,9 @@ class _PCClient:
                     msg = _REJECTED.get(resp.status, "Media PC request failed")
                     if resp.status == 409:
                         try:
-                            msg = str(json.loads(await read_capped(resp))["error"])
-                        except (ValueError, KeyError, TypeError):
+                            code = json.loads(await read_capped(resp))["error"]
+                            msg = code if _CODE_RE.fullmatch(code) else msg
+                        except (ValueError, KeyError, TypeError):  # TypeError: not a dict or not a string
                             pass
                     raise (PCAuthError if resp.status in (401, 403) else PCError)(msg)
                 return json.loads(await read_capped(resp) or b"{}") or {}
