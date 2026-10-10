@@ -25,12 +25,17 @@ from .hub import Hub
 _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SELECT, Platform.SWITCH, Platform.SENSOR]
-_SECRET_RE = re.compile("token|SendInputString|metaTag", re.IGNORECASE)
+_SECRET_RE = re.compile("token|lounge|screen|SendInputString|metaTag", re.IGNORECASE)
+_FILTERED = ("samsungtvws", "pyytlounge")  # third-party loggers that see secrets
 
 
 def _no_secrets(record: logging.LogRecord) -> bool:
-    """samsungtvws logs the TV token, typed text and the signed page URL at INFO/DEBUG."""
-    return not _SECRET_RE.search(record.getMessage())
+    """Drops samsungtvws records with the TV token, typed text or the signed page URL, and pyytlounge records with
+    the lounge token or screen id (also when only the traceback, e.g. a request URL, carries them)."""
+    text = record.getMessage()
+    if record.exc_info:
+        text += logging.Formatter().formatException(record.exc_info)
+    return not _SECRET_RE.search(text)
 
 
 def _platforms(hub: Hub) -> list[Platform]:
@@ -39,7 +44,7 @@ def _platforms(hub: Hub) -> list[Platform]:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # a logger's filters skip its children's records, so each module logger gets it (tv.py imported them all)
-    for name in ["samsungtvws", *(n for n in list(logging.root.manager.loggerDict) if n.startswith("samsungtvws."))]:
+    for name in {*_FILTERED, *(n for n in list(logging.root.manager.loggerDict) if n.split(".")[0] in _FILTERED)}:
         logging.getLogger(name).addFilter(_no_secrets)  # a no-op when already added
     api.async_register(hass)
     await hass.http.async_register_static_paths(
