@@ -60,16 +60,23 @@ pure helpers      catalog.py (scanning, link parsing, composition validation) ·
 
 | System | Module | Transport | Timeout |
 |---|---|---|---|
-| Samsung TV remote | `tv.py` | WebSocket `wss://host:8002`, pairing token | connect 10 s, send 15 s |
+| Samsung TV remote | `tv.py` | WebSocket `wss://host:8002`, pairing token: typing, pointer, key holds, and keys when the core remote is unusable | connect 10 s, send 15 s |
 | Samsung TV apps / power state | `tv.py` | REST `http://host:8001/api/v2/` | 5 s |
 | YouTube on the TV | `tv.py` | DIAL `http://host:8080/ws/apps/YouTube` + YouTube Lounge (pyytlounge) | 5 s / 20 s start / 5 s disconnect |
 | Wake-on-LAN | `tv.py` | UDP broadcast, executor | n/a |
-| Core Samsung TV integration | `activity.py`, `hub.py` | HA services on the configured `media_player` (and box remote, lights) via `activity.call_service` | 15 s |
+| Core Samsung TV integration | `activity.py`, `hub.py` | HA services on the configured `media_player` and the `remote` on its device (and box remote, lights) via `activity.call_service` | 15 s |
 | Plex / Jellyfin | `library.py` | HTTP(S) with token header | 10 s |
 | YouTube thumbnails / oEmbed | `library.py`, `ambience.py` | HTTPS to fixed YouTube hosts | 10 s / 5 s |
 | Media PC daemons | `pc.py` | HTTP + Bearer token | 10 s (play 30 s) |
 | ESP32 keyboard bridge | `keyboard.py` | HTTP + shared key header | 15 s |
 | LLM providers | `assistant.py` | provider SDK on HA's httpx client | 60 s |
+
+**TV keys**: `Hub.send_tv_key` is the only path for a TV key press (the hub's remote, keyboard Enter, the activity's
+power, HOME and input keys, ambience's autoplay OK and HOME, the `send_key` service). It finds the `remote` entity on
+the configured TV `media_player`'s device in the entity registry (platform `samsungtv` first) and, when its state
+exists and is not `unavailable`, sends the key with `remote.send_command`. Otherwise, and for key holds, it uses
+`tv.send_key`. This keeps HomeHub's own WebSocket, which the TV asks to Allow after every power-on, closed until the
+user types or moves the pointer. Managers and surfaces call `hub.send_tv_key`, never `tv.send_key`.
 
 ## Lifecycle
 
