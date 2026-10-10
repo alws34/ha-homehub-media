@@ -20,6 +20,7 @@ def fast(monkeypatch):
 
 def make_hub(options):
     hub = MagicMock(); hub.options = options; hub.tv = AsyncMock(); hub.tv.available = True
+    hub.send_tv_key = hub.tv.send_key  # routing is the hub's (test_hub)
     hub.ambience = AsyncMock(); hub.ambience.uses_media = True
     return hub
 

@@ -346,7 +346,7 @@ class AmbienceManager:
 
     async def _press_enter(self, _now: datetime) -> None:  # user gesture so the page may autoplay with sound
         try:
-            await self._hub.tv.send_key("KEY_ENTER")
+            await self._hub.send_tv_key("KEY_ENTER")
         except HomeAssistantError as err:
             _LOGGER.debug("Autoplay key failed: %s", err)
 
@@ -375,7 +375,7 @@ class AmbienceManager:
                 elif self._backend == "pc":
                     await self._hub.pc_ambient.stop()
                 elif time.monotonic() - self.page_last_seen < PAGE_TIMEOUT_SECS:  # never HOME the user's app
-                    await self._hub.tv.send_key("KEY_HOME")
+                    await self._hub.send_tv_key("KEY_HOME")
             except HomeAssistantError as err:
                 _LOGGER.warning("Could not stop ambience media: %s", err)
         if restore_lights and self._snapshot:

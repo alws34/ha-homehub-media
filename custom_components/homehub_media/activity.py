@@ -88,7 +88,7 @@ class ActivityManager:
             if entity:
                 await self._svc("media_player", "turn_off", entity)
             elif tv.available:
-                await self._try(tv.send_key("KEY_POWER"))
+                await self._try(self._hub.send_tv_key("KEY_POWER"))
             return True
         cold = not self.is_on()
         box_on = [self._svc("remote", "turn_on", self._opt(OPT_BOX)["remote"])] if activity == "box" else []
@@ -97,7 +97,7 @@ class ActivityManager:
         if cold:
             await asyncio.sleep(SETTLE_SECS)
         if activity == "tv":
-            await self._try(tv.send_key("KEY_HOME"))
+            await self._try(self._hub.send_tv_key("KEY_HOME"))
             ok = self.is_on()
         else:
             ok = await self._switch(self._opt(activity)["input"], 4 if force else 3 if cold else 2, force)
@@ -106,7 +106,7 @@ class ActivityManager:
 
     async def _switch(self, inp: dict, attempts: int, force: bool) -> bool:
         if inp["method"] == "key":
-            await self._try(self._hub.tv.send_key(inp["value"]))
+            await self._try(self._hub.send_tv_key(inp["value"]))
             return True  # discrete key: unverifiable, one attempt (PC:747-792)
         entity = self._opt(OPT_TV).get("entity")
 

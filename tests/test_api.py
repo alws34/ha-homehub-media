@@ -13,6 +13,8 @@ from custom_components.homehub_media.api import _signed
 from custom_components.homehub_media.const import DOMAIN
 from custom_components.homehub_media.library import BODY_MAX
 
+from .test_hub import samsung_remote
+
 
 async def test_subscribe_sends_snapshot(hass, hass_ws_client, setup_entry):
     ws = await hass_ws_client(hass)
@@ -210,7 +212,7 @@ async def test_service_calls_hub_and_records_command(hass, setup_entry):
     hub = setup_entry.runtime_data
     before = hub.last_command
     await hass.services.async_call(DOMAIN, "remote", {"command": "up", "target": "tv"}, blocking=True)
-    hub.tv.send_key.assert_awaited_with("KEY_UP")
+    hub.tv.send_key.assert_awaited_with("KEY_UP", 0)
     assert hub.last_command > before
     await hass.services.async_call(DOMAIN, "pointer", {"action": "move", "dx": "3.5", "dy": -2}, blocking=True)
     hub.tv.pointer_move.assert_awaited_with(3.5, -2.0)
@@ -219,6 +221,17 @@ async def test_service_calls_hub_and_records_command(hass, setup_entry):
     assert await hass.config_entries.async_unload(setup_entry.entry_id)
     with pytest.raises(ServiceValidationError, match="not set up"):
         await hass.services.async_call(DOMAIN, "remote", {"command": "up"}, blocking=True)
+
+
+async def test_send_key_service_uses_the_core_samsung_remote(hass, setup_entry):
+    hub = setup_entry.runtime_data
+    send = samsung_remote(hass)
+    hub.options["tv"] = {"entity": "media_player.tv"}
+    await hass.services.async_call(DOMAIN, "send_key", {"key": "KEY_UP"}, blocking=True)
+    assert send[-1].data == {"entity_id": "remote.tv", "command": "KEY_UP"}
+    hub.tv.send_key.assert_not_awaited()
+    await hass.services.async_call(DOMAIN, "send_key", {"key": "KEY_POWER", "hold_secs": 2}, blocking=True)
+    hub.tv.send_key.assert_awaited_once_with("KEY_POWER", 2.0)  # a hold needs HomeHub's own WebSocket
 
 
 async def test_rescan_apps_is_admin_only(hass, setup_entry, hass_read_only_user):

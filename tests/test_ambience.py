@@ -17,7 +17,9 @@ from custom_components.homehub_media.store import HomeHubStore
 
 def hub_with(options):
     hub = MagicMock(); hub.options = options; hub.tv = AsyncMock(); hub.activity = AsyncMock(); hub.apps = {}
-    hub.pc_ambient = None; hub.library = None; hub.sign_path = lambda p, hours=24: p; return hub
+    hub.pc_ambient = None; hub.library = None; hub.sign_path = lambda p, hours=24: p
+    hub.send_tv_key = hub.tv.send_key  # routing is the hub's (test_hub)
+    return hub
 
 
 async def test_lights_only_mode_snapshots_and_restores(hass):

@@ -1,13 +1,17 @@
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from custom_components.homehub_media import activity
 from custom_components.homehub_media import hub as hub_mod
+from custom_components.homehub_media.activity import ActivityManager
 from custom_components.homehub_media.const import DOMAIN
 from custom_components.homehub_media.hub import Hub
 from custom_components.homehub_media.tv import CannotConnect, PairingDenied
@@ -43,13 +47,13 @@ async def test_remote_routing(hass):
     await hub.remote("rewind")
     assert send[-1].data["command"] == "MEDIA_REWIND"
     await hub.remote("volume_up")  # volume always goes to the TV
-    hub.tv.send_key.assert_awaited_with("KEY_VOLUP")
+    hub.tv.send_key.assert_awaited_with("KEY_VOLUP", 0)
     await hub.remote("select", "pc")
     hub.pc_coord.remote.assert_awaited_with("select")
     await hub.remote("pause", "pc")  # the PC only has a toggle
     hub.pc_coord.remote.assert_awaited_with("play_pause")
     await hub.remote("power", "pc")  # the PC has no power key: the TV's
-    hub.tv.send_key.assert_awaited_with("KEY_POWER")
+    hub.tv.send_key.assert_awaited_with("KEY_POWER", 0)
     for command in ("guide", "fast_forward"):
         with pytest.raises(ServiceValidationError):
             await hub.remote(command, "pc")
@@ -94,7 +98,7 @@ async def test_power_without_entity_wakes_an_off_tv(hass):
     with pytest.raises(ServiceValidationError, match="TV media player"):
         await hub.set_volume(10)
     await hub.remote("power")  # off, no MAC: the key, which reports the TV unreachable
-    hub.tv.send_key.assert_awaited_with("KEY_POWER")
+    hub.tv.send_key.assert_awaited_with("KEY_POWER", 0)
     hub.tv.send_key.reset_mock()
     hub.tv.mac = "aa:bb:cc:dd:ee:ff"
     await hub.remote("power")
@@ -120,7 +124,7 @@ async def test_send_text_routing(hass):
     await hub.send_text("ho")
     hub.tv.send_text.assert_awaited_with("ho")
     await hub.keyboard_key("enter")
-    hub.tv.send_key.assert_awaited_with("KEY_ENTER")
+    hub.tv.send_key.assert_awaited_with("KEY_ENTER", 0)
     with pytest.raises(ServiceValidationError, match="keyboard bridge"):
         await hub.keyboard_key("clear")
     await hub.send_text("x", "keyboard")
@@ -301,3 +305,65 @@ async def test_a_hung_tv_entity_call_times_out(hass, monkeypatch):
     async with asyncio.timeout(5):
         with pytest.raises(HomeAssistantError, match="did not finish"):
             await hub.set_volume(30)
+
+
+# ---- TV keys through the core Samsung TV integration's remote ------------------------------------------------
+
+def samsung_remote(hass, state="on"):
+    """The core integration's media player and remote on one device, plus another integration's remote."""
+    entry = MockConfigEntry(domain="samsungtv")
+    entry.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, identifiers={("samsungtv", "x")})
+    reg = er.async_get(hass)
+    for domain, platform, name in (("media_player", "samsungtv", "tv"), ("remote", "other", "other"),
+                                   ("remote", "samsungtv", "tv")):
+        reg.async_get_or_create(domain, platform, "x", device_id=device.id, suggested_object_id=name)
+    hass.states.async_set("remote.other", "on")
+    if state:
+        hass.states.async_set("remote.tv", state)
+    return async_mock_service(hass, "remote", "send_command")
+
+
+def tv_hub(hass):
+    hub = make_hub(hass, {**OPTS, "tv": {"entity": "media_player.tv"}})
+    hass.states.async_set("media_player.tv", "on")
+    return hub
+
+
+async def test_tv_keys_go_through_the_core_samsung_remote(hass):
+    send = samsung_remote(hass)
+    hub = tv_hub(hass)
+    await hub.remote("up")
+    await hub.keyboard_key("enter", "tv")
+    am = ActivityManager(hass, hub)
+    await am._activate("tv", False)  # HOME after power-on
+    await am._switch({"method": "key", "value": "KEY_HDMI3"}, 1, False)
+    await hub.ambience._press_enter(None)
+    hub.ambience.uses_media, hub.ambience.page_last_seen = True, time.monotonic()
+    await hub.ambience._stop(restore_lights=False)  # HOME away from the ambience page
+    assert [(c.data["entity_id"], c.data["command"]) for c in send] == [
+        ("remote.tv", k) for k in ("KEY_UP", "KEY_ENTER", "KEY_HOME", "KEY_HDMI3", "KEY_ENTER", "KEY_HOME")]
+    hub.tv.send_key.assert_not_awaited()  # HomeHub's own WebSocket stays closed
+
+
+async def test_tv_keys_fall_back_to_the_websocket(hass):
+    send = samsung_remote(hass, state="unavailable")
+    hub = tv_hub(hass)
+    await hub.send_tv_key("KEY_UP")  # the remote is unavailable
+    hub.tv.send_key.assert_awaited_with("KEY_UP", 0)
+    hass.states.async_set("remote.tv", "on")
+    await hub.send_tv_key("KEY_POWER", 2)  # holds need the WebSocket
+    hub.tv.send_key.assert_awaited_with("KEY_POWER", 2)
+    await hub.send_tv_key("KEY_UP\n")  # never to the remote: the TV client rejects it
+    hub.tv.send_key.assert_awaited_with("KEY_UP\n", 0)
+    hass.states.async_remove("remote.tv")
+    await hub.send_tv_key("KEY_DOWN")  # no state
+    hub.tv.send_key.assert_awaited_with("KEY_DOWN", 0)
+    hass.states.async_set("remote.tv", "on")
+    hub.options["tv"] = {}  # no TV media player
+    await hub.send_tv_key("KEY_LEFT")
+    hub.tv.send_key.assert_awaited_with("KEY_LEFT", 0)
+    hub.tv.available = True
+    await ActivityManager(hass, hub)._activate("off", False)  # no entity: the power key over the WebSocket
+    hub.tv.send_key.assert_awaited_with("KEY_POWER", 0)
+    assert send == []

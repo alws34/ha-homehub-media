@@ -14,6 +14,7 @@ from homeassistant.components.http.auth import async_sign_path
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
@@ -50,7 +51,7 @@ from .keyboard import KeyboardBridge
 from .library import JellyfinServer, Library, PlexServer, YouTubeArt
 from .pc import AmbientPlayerClient, CoordinatorClient
 from .store import HomeHubStore
-from .tv import APP_ID_RE, PairingDenied, SamsungTV
+from .tv import APP_ID_RE, KEY_RE, PairingDenied, SamsungTV
 
 _LOGGER = logging.getLogger(__name__)
 PC_KEYS = {**PC_COMMANDS, "play": "play_pause", "pause": "play_pause"}  # the PC only has a toggle
@@ -220,7 +221,7 @@ class Hub:
         elif target == "tv" and command == "power" and not self.tv.available and self.tv.mac:
             await self.tv.wake()  # a WebSocket key cannot reach a TV that is off
         elif target == "tv" and command in TV_KEYS:
-            await self.tv.send_key(TV_KEYS[command])
+            await self.send_tv_key(TV_KEYS[command])
             if command in ("play", "pause"):
                 self._paused = command == "pause"
         elif target == "box" and box and command in BOX_KEYS:
@@ -230,6 +231,26 @@ class Hub:
             await self.pc_coord.remote(PC_KEYS[command])
         else:
             raise self._unsupported(command, target)
+
+    def _tv_remote(self) -> str | None:
+        """The core Samsung TV integration's remote on the TV media player's device, when it is usable."""
+        reg = er.async_get(self.hass)
+        player = reg.async_get((self.options.get(OPT_TV) or {}).get("entity") or "")
+        if not (player and player.device_id):
+            return None
+        remotes = sorted((e for e in er.async_entries_for_device(reg, player.device_id) if e.domain == "remote"),
+                         key=lambda e: e.platform != "samsungtv")
+        st = self.hass.states.get(remotes[0].entity_id) if remotes else None
+        return st.entity_id if st and st.state != "unavailable" else None
+
+    async def send_tv_key(self, key: str, hold_secs: float = 0) -> None:
+        """Every TV key press. Through the core integration's remote when there is one, so HomeHub's own
+        WebSocket (one more client the TV asks to Allow after each power-on) opens only for typing, the cursor
+        and key holds."""
+        if not hold_secs and KEY_RE.fullmatch(key) and (remote := self._tv_remote()):
+            await call_service(self.hass, "remote", "send_command", {"entity_id": remote, "command": key})
+        else:
+            await self.tv.send_key(key, hold_secs)
 
     async def _tv_entity(self, entity: str, command: str) -> None:
         st = self.hass.states.get(entity)
@@ -305,7 +326,7 @@ class Hub:
     async def keyboard_key(self, key: str, target: str | None = None) -> None:
         target = self._text_target(target)
         if target == "tv" and key == "enter":
-            await self.tv.send_key("KEY_ENTER")
+            await self.send_tv_key("KEY_ENTER")
         elif target == "tv":
             raise ServiceValidationError(f"The TV's on-screen keyboard has no {key} key; it needs the keyboard bridge")
         elif target == "pc" and self.pc_coord:
