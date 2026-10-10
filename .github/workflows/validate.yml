@@ -5,14 +5,13 @@ jobs:
   hacs:
     runs-on: ubuntu-latest
     steps:
-      # hacs/action and hassfest are used at their documented moving refs (@main/@master), not pinned.
-      - uses: hacs/action@main
+      - uses: hacs/action@1ebf01c408f29afcb6406bd431bc98fd8cbb15aa  # main
         with: { category: integration }
   hassfest:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
-      - uses: home-assistant/actions/hassfest@master  # documented usage; not pinned
+      - uses: home-assistant/actions/hassfest@06749dd8c0b54f350bc69c8752456cee498808a3  # master
   tests:
     runs-on: ubuntu-latest
     steps:
