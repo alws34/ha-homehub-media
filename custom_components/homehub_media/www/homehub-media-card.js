@@ -62,6 +62,12 @@ const toggleIn = (list, id) => {
 // a mode's videos in order: its random rotation, else its one visual (the one playing is not always the first)
 const modeIds = (comp) => (comp?.visuals?.length ? comp.visuals : comp?.visual ? [comp.visual] : []);
 const nextId = (ids, cur) => ids[(ids.indexOf(cur) + 1) % ids.length];
+// the mode on the top shelf: the playing one, else the one auto ambience would pick now, else the first
+const featuredMode = (a = {}) => {
+  const playing = !!a.mode && a.mode !== "off";
+  const id = playing ? a.mode : a.daypart_mode || a.modes?.[0]?.id;
+  return { m: a.modes?.find((x) => x.id === id) || (id ? { id, name: pretty(id) } : null), playing };
+};
 // the mode's YouTube videos as editor rows; set_mode_videos takes back the name (a YouTube visual's title) and link
 const modeVideos = (comp, visuals) => modeIds(comp)
   .map((id) => visuals?.find((v) => v.id === id && v.source_type === "youtube")).filter(Boolean)
@@ -767,10 +773,8 @@ class HomeHubMediaCard extends HTMLElement {
     const a = this._snap.ambience || {};
     const on = !this._edit && !!a.mode && a.mode !== "off";
     this._sec("amberr", [a.error], () => (a.error ? banner(a.error) : ""));
-    this._sec("hero", on ? [a.mode, a.visual, a.modes, a.compositions?.[a.mode], this._catVer] : [!this._edit], () => {
-      if (on) return this._heroHtml();
-      return this._edit ? "" : `<div class="idle">Nothing playing. Tap a mode to start it on the TV.</div>`;
-    });
+    this._sec("hero", [!this._edit, a.mode, a.visual, a.modes, a.daypart_mode, a.compositions, this._catVer],
+      () => (this._edit ? "" : this._heroHtml()));
     const until = on && a.sleep_until ? new Date(a.sleep_until).getTime() : null;
     const mins = until ? Math.max(0, Math.ceil((until - Date.now()) / 60000)) : null;
     this._sec("sleep", [on, mins], () => (!on ? "" : `<div class="sleep">
@@ -782,22 +786,25 @@ class HomeHubMediaCard extends HTMLElement {
   }
 
   _heroHtml() {
-    const a = this._snap.ambience;
-    const m = a.modes?.find((x) => x.id === a.mode) || { id: a.mode, name: pretty(a.mode) };
-    const ids = m.lights_only ? [] : modeIds(a.compositions?.[a.mode]);
-    const i = ids.indexOf(a.visual);
-    const v = this._visual(a.visual);
+    const a = this._snap.ambience || {};
+    const { m, playing } = featuredMode(this._snap.ambience);
+    if (!m) return "";
+    const ids = m.lights_only ? [] : modeIds(a.compositions?.[m.id]);
+    const i = playing ? ids.indexOf(a.visual) : -1;
+    const v = this._visual(playing ? a.visual : ids[0]);
+    const meta = [m.lights_only ? "Lights only" : ids.length ? `${ids.length} video${ids.length === 1 ? "" : "s"}` : "No videos",
+      i >= 0 ? `${i + 1} of ${ids.length}` : ""].filter(Boolean).join(" · ");
     return `<div class="hero">
       <span class="ph">${icon(m.icon || "mdi:lightbulb-group")}</span>${img(v?.preview)}
       <div class="over">
-        <div class="top"><span class="live">${m.lights_only ? "Lights on" : "On the TV"}</span><span>${i >= 0 ? `${i + 1} of ${ids.length} · loops` : a.visual ? "loops" : ""}</span></div>
-        <div>
-          <b class="hn">${esc(m.name)}</b><small>${esc(v?.title || (m.lights_only ? "Lights only" : ""))}</small>
-          <div class="acts">
-            <button class="hb primary" data-a="amb_stop">${icon("mdi:stop")}Stop</button>
-            ${ids.length >= 2 ? `<button class="hb" data-a="next" data-v="${esc(nextId(ids, a.visual))}">${icon("mdi:skip-next")}Next video</button>` : ""}
-            ${m.lights_only ? "" : `<button class="hb" data-a="edit" data-v="${esc(m.id)}" aria-label="Videos of ${esc(m.name)}">${icon("mdi:pencil")}Videos</button>`}
-          </div>
+        <span class="eyebrow">${playing ? `<span class="live">${m.lights_only ? "Lights on" : "Now playing"}</span>` : a.daypart_mode === m.id ? "Suggested now" : "Ambience"}</span>
+        <b class="hn">${esc(m.name)}</b>
+        <small>${esc(meta)}${v?.title && !m.lights_only ? ` · ${esc(v.title)}` : ""}</small>
+        <div class="acts">
+          ${playing ? `<button class="hb primary" data-a="amb_stop">${icon("mdi:stop")}Stop</button>`
+            : `<button class="hb primary" data-a="mode" data-v="${esc(m.id)}" aria-label="Play ${esc(m.name)}">${icon("mdi:play")}Play</button>`}
+          ${playing && ids.length >= 2 ? `<button class="hb round" data-a="next" data-v="${esc(nextId(ids, a.visual))}" aria-label="Next video">${icon("mdi:skip-next")}</button>` : ""}
+          ${m.lights_only ? "" : `<button class="hb round" data-a="edit" data-v="${esc(m.id)}" aria-label="Videos of ${esc(m.name)}">${icon("mdi:playlist-edit")}</button>`}
         </div>
       </div>
     </div>`;
@@ -806,19 +813,27 @@ class HomeHubMediaCard extends HTMLElement {
   _modesHtml() {
     const a = this._snap.ambience || {};
     const dp = a.modes?.find((m) => m.id === a.daypart_mode);
+    const { m: fm, playing } = featuredMode(this._snap.ambience);
+    const vids = fm && !fm.lights_only ? modeIds(a.compositions?.[fm.id]).map((id) => this._visual(id) || { id }) : [];
     return `<h3 class="sh">Modes</h3>
-      <div class="modes">${(a.modes || []).map((m) => {
+      <div class="tvrow">${(a.modes || []).map((m) => {
         const on = a.mode === m.id;
         const n = m.lights_only ? 0 : modeIds(a.compositions?.[m.id]).length;
-        const sub = m.lights_only ? "Lights only" : n ? `${n} video${n === 1 ? "" : "s"}` : "No videos";
-        return `<div class="mode${on ? " on" : ""}">
-          <button class="mt" data-a="mode" data-v="${esc(m.id)}" aria-pressed="${on}" aria-label="Start ${esc(m.name)}${on ? ", playing" : ""}">
-            <span class="ph">${icon(m.icon || "mdi:lightbulb-group")}</span>${n ? img(this._visual(modeIds(a.compositions[m.id])[0])?.preview) : ""}
-            <span class="lab"><b>${esc(m.name)}</b><small>${on ? "▶ Playing · " : ""}${esc(sub)}</small></span>
-          </button>
-          ${m.lights_only ? "" : `<button class="edit" data-a="edit" data-v="${esc(m.id)}" aria-label="Edit ${esc(m.name)}">${icon("mdi:pencil")}</button>`}
-        </div>`;
+        const sub = on ? "Now playing" : m.lights_only ? "Lights only" : n ? `${n} video${n === 1 ? "" : "s"}` : "No videos";
+        return `<button class="tvp${on ? " on" : ""}" data-a="mode" data-v="${esc(m.id)}"${m.lights_only ? "" : ` data-hold="edit"`} aria-pressed="${on}"
+            aria-label="Start ${esc(m.name)}${on ? ", playing" : ""}${m.lights_only ? "" : ". Hold to edit its videos"}">
+            <span class="tva"><span class="ph">${icon(m.icon || "mdi:lightbulb-group")}</span>${n ? img(this._visual(modeIds(a.compositions[m.id])[0])?.preview) : ""}${on ? `<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>` : ""}</span>
+            <b>${esc(m.name)}</b><small>${esc(sub)}</small>
+          </button>`;
       }).join("")}</div>
+      ${vids.length ? `<h3 class="sh">${playing ? "Up next" : `In ${esc(fm.name)}`}</h3>
+      <div class="tvrow sm">${vids.map((v) => {
+        const on = playing && a.visual === v.id;
+        return `<button class="tvp${on ? " on" : ""}" data-a="vid" data-m="${esc(fm.id)}" data-v="${esc(v.id)}" aria-label="Play ${esc(v.title || "video")}">
+            <span class="tva"><span class="ph">${icon("mdi:youtube")}</span>${img(v.preview)}${on ? `<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>` : ""}</span>
+            <b>${esc(v.title || "Video")}</b>
+          </button>`;
+      }).join("")}</div>` : ""}
       <div class="auto">
         <span class="ax"><b>Auto ambience${dp ? `<span> · now ${esc(dp.name)}</span>` : ""}</b><small>Starts a mode by time of day when the TV is idle</small></span>
         <button class="sw" role="switch" aria-checked="${!!a.auto}" data-a="auto" aria-label="Auto ambience"></button>
@@ -1161,6 +1176,7 @@ class HomeHubMediaCard extends HTMLElement {
       case "drawer": return this._toggleDrawer();
       case "mode": return this._call("ambience_start", { mode: v });
       case "next": return this._call("ambience_start", { mode: this._snap.ambience?.mode, video: v });
+      case "vid": return this._call("ambience_start", { mode: b.dataset.m, video: v });
       case "auto": return this._autoAmbience();
       case "amb_stop": return this._call("ambience_stop");
       case "edit": return this._openEditor(v);
@@ -1241,6 +1257,7 @@ class HomeHubMediaCard extends HTMLElement {
     h.timer = setTimeout(() => {
       h.fired = true;
       navigator.vibrate?.(10);
+      if (el.dataset.hold === "edit") return this._openEditor(el.dataset.v);
       if (!repeat) {
         this._toast(`Restarting ${el.textContent.trim()}…`);
         this._call("restart_app", { app: el.dataset.v });
@@ -1570,27 +1587,65 @@ h3.sh ha-icon { --mdc-icon-size: 16px; }
 .ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--hh-fg2); background: radial-gradient(circle at 30% 20%, rgba(var(--hh-rgb), .28), transparent 65%), var(--hh-s2); }
 .ph ha-icon { --mdc-icon-size: 40px; opacity: .7; }
 /* artwork is dark in either theme, so the white text on it is too */
-.hero .ph, .mode .ph { color: rgba(255, 255, 255, .7); background: radial-gradient(circle at 30% 20%, rgba(var(--hh-rgb), .5), transparent 70%), #1e252e; }
-.hero img, .mode img, .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-.hero { position: relative; aspect-ratio: 16 / 9; max-height: 300px; width: 100%; border-radius: 16px; overflow: hidden; background: #000; color: #fff; isolation: isolate; }
-.hero .over {
-  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: space-between; padding: 12px;
-  background: linear-gradient(rgba(0, 0, 0, .5), transparent 35%, transparent 40%, rgba(0, 0, 0, .82));
+.hero .ph, .tva .ph { color: rgba(255, 255, 255, .7); background: radial-gradient(circle at 30% 20%, rgba(var(--hh-rgb), .5), transparent 70%), #1e252e; }
+.hero img, .tva img, .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.hero {
+  --fade: var(--soft-surface, var(--hh-bg));
+  position: relative; aspect-ratio: 3 / 4; max-height: 560px; width: calc(100% + 24px); margin: -8px -12px 0; border-radius: 26px 26px 0 0;
+  overflow: hidden; background: var(--fade); color: #fff; isolation: isolate;
 }
-.hero .top { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.hero img { animation: hh-kb 24s ease-in-out infinite alternate; }
+@keyframes hh-kb { to { transform: scale(1.08) translate(-1.5%, -1%); } }
+@media (prefers-reduced-motion: reduce) { .hero img { animation: none; } }
+.hero .over {
+  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; gap: 4px; padding: 22px 22px 70px;
+  background: linear-gradient(rgba(0, 0, 0, .25), transparent 22%, transparent 40%, rgba(0, 0, 0, .55) 66%, color-mix(in srgb, var(--fade) 92%, #000) 92%, var(--fade));
+}
+.eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; opacity: .85; margin-bottom: 2px; }
 .live { display: inline-flex; align-items: center; gap: 6px; }
 .live::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #ff5a4e; box-shadow: 0 0 0 3px rgba(255, 90, 78, .3); }
 .hn, .hero small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hn { font-size: 20px; font-weight: 700; }
-.hero small { font-size: 13px; opacity: .88; }
-.acts { display: flex; gap: 6px; margin-top: 8px; }
+.hn { font-size: 40px; font-weight: 800; letter-spacing: -.02em; line-height: 1.02; text-shadow: 0 2px 16px rgba(0, 0, 0, .45); max-width: 100%; }
+.hero small { font-size: 14px; opacity: .85; max-width: 100%; }
+.acts { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 .hb {
-  display: inline-flex; align-items: center; gap: 4px; min-height: 36px; padding: 0 12px; border-radius: 999px; white-space: nowrap;
-  background: rgba(255, 255, 255, .2); color: #fff; font-size: 13px; font-weight: 600; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 22px; border-radius: 999px; white-space: nowrap;
+  background: rgba(255, 255, 255, .18); color: #fff; font-size: 15px; font-weight: 700; backdrop-filter: blur(14px) saturate(1.4); -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14);
 }
-.hb ha-icon { --mdc-icon-size: 18px; }
-.hb.primary { background: #fff; color: #111; }
+.hb ha-icon { --mdc-icon-size: 20px; }
+.hb.primary { background: #fff; color: #111; min-width: 132px; box-shadow: 0 8px 24px -8px rgba(0, 0, 0, .7); }
+.hb.round { width: 44px; padding: 0; }
 @media (hover: hover) { .hb:not(.primary):hover { background: rgba(255, 255, 255, .3); } }
+[data-s=hero]:not(:empty) + [data-s=sleep], [data-s=hero]:not(:empty) + [data-s=sleep]:empty + .ambmain { margin-top: -58px; position: relative; z-index: 1; }
+.ambmain > h3.sh, .sleep h3.sh { font-size: 19px; font-weight: 700; letter-spacing: -.01em; text-transform: none; color: var(--hh-fg); margin-bottom: 8px; }
+/* Apple TV rows: posters that scroll sideways and snap, title under the art */
+.tvrow {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 64%; gap: 14px; overflow-x: auto; overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory; scroll-padding: 0 4px; padding: 6px 4px 12px; margin: -6px -4px -8px; scrollbar-width: none; touch-action: pan-x pan-y;
+}
+.tvrow::-webkit-scrollbar { display: none; }
+.tvrow.sm { grid-auto-columns: 46%; }
+.tvrow { padding: 10px 10px 14px; margin: -10px -10px -8px; scroll-padding: 0 10px; }  /* room for the lifted tile's scale and glow */
+.tvp { display: grid; gap: 3px; min-width: 0; text-align: left; color: var(--hh-fg); scroll-snap-align: start; }
+.tvp:active:not(:disabled) { transform: scale(.97); }
+.tva {
+  position: relative; display: block; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden; background: #1e252e; margin-bottom: 5px;
+  box-shadow: 0 10px 22px -12px rgba(0, 0, 0, .7); transition: transform .25s var(--hh-ease), box-shadow .25s;
+}
+.tvp.on .tva { transform: scale(1.04); box-shadow: 0 0 0 2px rgba(255, 255, 255, .9), 0 14px 30px -10px rgba(var(--hh-rgb), .8); }
+@media (hover: hover) { .tvp:hover .tva { transform: translateY(-3px) scale(1.02); } }
+.tvp b, .tvp small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
+.tvp b { font-size: 14.5px; font-weight: 600; }
+.tvp small { font-size: 12.5px; color: var(--hh-fg2); }
+.tvp.on small { color: var(--hh-accent); font-weight: 600; }
+.tvrow.sm .tvp b { font-size: 13px; font-weight: 500; color: var(--hh-fg2); }
+.tvrow.sm .tvp.on b { color: var(--hh-fg); }
+.eq { position: absolute; right: 8px; bottom: 8px; display: flex; align-items: flex-end; gap: 2px; height: 16px; padding: 4px 5px; border-radius: 6px; background: rgba(0, 0, 0, .55); box-sizing: content-box; }
+.eq i { width: 3px; background: #fff; border-radius: 1px; animation: hh-eq 1s ease-in-out infinite alternate; }
+.eq i:nth-child(2) { animation-delay: -.4s; } .eq i:nth-child(3) { animation-delay: -.7s; }
+@keyframes hh-eq { from { height: 25%; } to { height: 100%; } }
+@media (prefers-reduced-motion: reduce) { .eq i { animation: none; height: 70%; } }
 .idle {
   display: flex; align-items: center; justify-content: center; gap: 8px; padding: 16px; border: 1px dashed var(--hh-line);
   border-radius: 14px; color: var(--hh-fg2); font-size: 13.5px; text-align: center; text-wrap: balance;
@@ -1599,22 +1654,9 @@ h3.sh ha-icon { --mdc-icon-size: 16px; }
 .sleep .ib { margin-left: -4px; }
 .slchips { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .slchips .chip { justify-content: center; padding: 0 6px; }
-.modes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.mode { position: relative; min-width: 0; aspect-ratio: 16 / 10; border-radius: 14px; overflow: hidden; background: #1e252e; }
-.mt { position: absolute; inset: 0; display: block; width: 100%; color: #fff; text-align: left; }
-.mt:active:not(:disabled) { transform: none; }
-.mode img { transition: transform .3s var(--hh-ease); }
-@media (hover: hover) { .mode:hover img { transform: scale(1.04); } }
-.lab { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 8px; background: linear-gradient(transparent, rgba(0, 0, 0, .82)); }
-.lab b, .lab small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.lab b { font-size: 15px; font-weight: 600; }
-.lab small { font-size: 12px; opacity: .88; }
-.mode.on::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 3px var(--hh-accent); pointer-events: none; }
-.mode.on .lab small { opacity: 1; font-weight: 600; }
-.edit, .vb { display: grid; place-items: center; border-radius: 50%; background: rgba(8, 12, 18, .66); color: #fff; }
-.edit { position: absolute; top: 4px; right: 4px; width: 36px; height: 36px; }
-.edit ha-icon, .vb ha-icon { --mdc-icon-size: 17px; }
-.auto { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: var(--hh-s1); }
+.vb { display: grid; place-items: center; border-radius: 50%; background: rgba(8, 12, 18, .66); color: #fff; }
+.vb ha-icon { --mdc-icon-size: 17px; }
+.auto { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 16px; background: var(--hh-face); box-shadow: var(--hh-up); }
 .ax { flex: 1; min-width: 0; }
 .ax b { display: block; font-size: 14px; font-weight: 600; }
 .ax b span { font-weight: 400; color: var(--hh-fg2); }
@@ -1773,4 +1815,4 @@ window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === TAG)) {
   window.customCards.push({ type: TAG, name: "HomeHub Media", description: "Remote, ambience and library", preview: true });
 }
-if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeIds, nextId, modeVideos };
+if (window.__HOMEHUB_TEST__) window.__homehubTest = { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeIds, nextId, modeVideos, featuredMode };
