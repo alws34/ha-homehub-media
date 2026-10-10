@@ -31,11 +31,10 @@ _FILTERED = ("samsungtvws", "pyytlounge")  # third-party loggers that see secret
 
 def _no_secrets(record: logging.LogRecord) -> bool:
     """Drops samsungtvws records with the TV token, typed text or the signed page URL, and pyytlounge records with
-    the lounge token or screen id (also when only the traceback, e.g. a request URL, carries them)."""
-    text = record.getMessage()
-    if record.exc_info:
-        text += logging.Formatter().formatException(record.exc_info)
-    return not _SECRET_RE.search(text)
+    the lounge token or screen id. pyytlounge tracebacks (request URLs with the token) are stripped."""
+    if record.name.startswith("pyytlounge"):
+        record.exc_info = record.exc_text = record.stack_info = None
+    return not _SECRET_RE.search(record.getMessage())
 
 
 def _platforms(hub: Hub) -> list[Platform]:
