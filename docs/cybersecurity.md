@@ -162,9 +162,10 @@ The secrets are:
 - **Subprocesses**: commands run with absolute paths and no shell, and `systemctl` actions are limited to
   start/stop/is-active.
 - **Error responses** carry only short error codes, never stack traces or paths.
-- **systemd hardening**: `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp`, no
-  capabilities, `SystemCallFilter=@system-service`, `MemoryMax`, `TasksMax`. The firewall step in
-  `media-pc/README.md` is mandatory.
+- **systemd hardening** (the ambient-player and coordinator units): `NoNewPrivileges`, `ProtectSystem=strict`,
+  `ProtectHome=read-only`, `PrivateTmp`, no capabilities, `SystemCallFilter=@system-service`, `MemoryMax`,
+  `TasksMax`. The browser-client template leaves `NoNewPrivileges` and `PrivateTmp` commented out because Ubuntu's
+  snap browsers cannot start under them. The firewall step in `media-pc/README.md` is mandatory.
 
 ## 9. Accepted risks
 
