@@ -1,11 +1,14 @@
 import asyncio
 import base64
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import aiohttp
 import pytest
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from multidict import CIMultiDict, CIMultiDictProxy
 from pyytlounge import NowPlayingEvent, PlaybackStateEvent
 from pyytlounge.exceptions import NotConnectedException
 from samsungtvws import async_connection
@@ -573,3 +576,21 @@ async def test_a_hung_websocket_send_does_not_hold_the_lock(hass, fake_remote, m
         with pytest.raises(tvmod.CannotConnect):
             await tv.send_key("KEY_HOME")
     assert not tv._lock.locked() and not tv.available
+
+
+async def test_lounge_errors_never_log_the_token(hass, aioclient_mock, lounge, monkeypatch, caplog):
+    url = URL("https://www.youtube.com/api/lounge/bc/bind?loungeIdToken=SECRET")
+    info = aiohttp.RequestInfo(url, "POST", CIMultiDictProxy(CIMultiDict()), url)
+    denied = aiohttp.ClientResponseError(info, (), status=400)
+    async def refused(api, video_id): raise denied
+    lounge.on_play = refused
+    monkeypatch.setattr(tvmod, "YT_START_SECS", 0)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    with caplog.at_level(logging.DEBUG), pytest.raises(HomeAssistantError) as err:
+        await tv.play_youtube(VID, "111299001912")
+    monkeypatch.setattr(lounge, "connect", AsyncMock(side_effect=denied))
+    with caplog.at_level(logging.DEBUG):
+        await tv.youtube_keepalive()
+    assert "400" in caplog.text and "SECRET" not in caplog.text
+    assert err.value.__cause__ is None  # no chained traceback with the request URL either
+    await tv.stop_youtube("111299001912")
