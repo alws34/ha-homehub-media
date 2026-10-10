@@ -1754,7 +1754,15 @@ input[type=range]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px va
 }
 `;
 
-if (!customElements.get(TAG)) customElements.define(TAG, HomeHubMediaCard);
+// ponytail: HA swaps window.customElements for a new registry ~70 ms into page load (seen on 2026.9); this extra
+// module can run before that and define into the old one, so define again until the current registry has it.
+// A subclass, because the new registry may forward to the old one, where the class is already taken.
+const define = () => {
+  if (customElements.get(TAG)) return;
+  try { customElements.define(TAG, HomeHubMediaCard); } catch { customElements.define(TAG, class extends HomeHubMediaCard {}); }
+};
+define();
+for (const ms of [100, 500, 2000, 5000]) setTimeout(define, ms);
 window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === TAG)) {
   window.customCards.push({ type: TAG, name: "HomeHub Media", description: "Remote, ambience and library", preview: true });
