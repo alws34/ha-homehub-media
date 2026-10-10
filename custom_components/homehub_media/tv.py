@@ -365,9 +365,10 @@ class SamsungTV:
 
     async def _drop_lounge(self) -> None:
         """End the lounge session (caller holds _yt_lock); the next _lounge() opens a new one."""
-        api, self._yt_api, self._yt_now = self._yt_api, None, None
-        if self._yt_sub:
-            self._yt_sub.cancel()
+        api, sub, self._yt_api, self._yt_sub, self._yt_now = self._yt_api, self._yt_sub, None, None, None
+        if sub:
+            sub.cancel()
+            await asyncio.wait([sub])
         if api and api.connected():
             with contextlib.suppress(*LOUNGE_ERRORS):  # incl. TimeoutError: never hold the lock
                 async with asyncio.timeout(YT_STOP_SECS):
@@ -436,6 +437,9 @@ class SamsungTV:
             raise HomeAssistantError("Wake-on-LAN failed") from err
 
     async def close(self) -> None:
+        async with self._yt_lock:  # unload: no lounge subscription task outlives the entry
+            self._yt_video = None
+            await self._drop_lounge()
         if remote := self._remote:
             self._remote = None
             await remote.close()
