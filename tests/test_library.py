@@ -5,6 +5,7 @@ import asyncio
 import base64
 from datetime import timedelta
 
+import aiohttp
 import pytest
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
@@ -354,3 +355,10 @@ async def test_authenticated_requests_do_not_follow_redirects(hass, redirector):
     with pytest.raises(HomeAssistantError, match="redirect"):
         await JellyfinServer(hass, url, "key", "u1", None).recently_added()
     assert redirector.hits == []  # the token never went to the new location
+
+
+async def test_invalid_url_error_is_not_echoed(hass, aioclient_mock):
+    aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", exc=aiohttp.InvalidURL(f"{PLEX}/?X-Plex-Token=SECRET"))
+    with pytest.raises(HomeAssistantError) as err:
+        await PlexServer(hass, PLEX, "tok", None).continue_watching()
+    assert str(err.value).endswith("failed: InvalidURL")  # a ClientError, not read_capped's ValueError

@@ -96,11 +96,11 @@ class _Server:
                 if image and not resp.content_type.startswith("image/"):
                     raise HomeAssistantError(f"{self.name} {path}: not an image")
                 return await read_capped(resp, ART_MAX if image else BODY_MAX), resp.content_type
-        except ValueError as err:  # read_capped's own message
-            raise HomeAssistantError(f"{self.name} {path}: {err}") from None
-        except (aiohttp.ClientError, TimeoutError) as err:
+        except (aiohttp.ClientError, TimeoutError) as err:  # first: aiohttp.InvalidURL is a ValueError too
             raise (InvalidAuth if getattr(err, "status", None) in (401, 403) else HomeAssistantError)(
                 f"{self.name} {path} failed: {why(err)}") from None
+        except ValueError as err:  # read_capped's own message
+            raise HomeAssistantError(f"{self.name} {path}: {err}") from None
 
     async def _json(self, path: str, params: dict | None = None):
         body, _ = await self._req(path, params)
