@@ -90,14 +90,15 @@ _APP = vol.Match(r"^[A-Za-z0-9._-]{1,64}\Z")
 _TYPE_TARGET = vol.In(("tv", "pc", "keyboard"))
 _DELTA = vol.All(vol.Coerce(float), vol.Range(-500, 500))
 _MEDIA_ID = vol.Match(r"^[a-z0-9][a-z0-9_-]{0,63}\Z")  # catalog.ID_RE
+_SLUG = vol.All(cv.slug, vol.Length(max=64))  # mode ids, media-PC clients
 _PCT = vol.All(vol.Coerce(float), vol.Range(0, 100))  # catalog.validate_composition rounds to int
-COMPOSITION = {  # types only; the ambience manager validates ids and the merged composition
-    vol.Optional("visual"): vol.Any(None, cv.string), vol.Optional("visual_enabled"): cv.boolean,
+COMPOSITION = {  # bounded ids; the ambience manager checks them again and validates the merged composition
+    vol.Optional("visual"): vol.Any(None, _MEDIA_ID), vol.Optional("visual_enabled"): cv.boolean,
     vol.Optional("video_loop"): cv.boolean, vol.Optional("video_random_start"): cv.boolean,
-    vol.Optional("original_volume"): _PCT, vol.Optional("soundtrack"): vol.Any(None, cv.string),
+    vol.Optional("original_volume"): _PCT, vol.Optional("soundtrack"): vol.Any(None, _MEDIA_ID),
     vol.Optional("soundtrack_loop"): cv.boolean, vol.Optional("soundtrack_random_start"): cv.boolean,
     vol.Optional("soundtrack_volume"): _PCT,
-    vol.Optional("visuals"): vol.All(cv.ensure_list, [cv.string], vol.Length(max=50)),
+    vol.Optional("visuals"): vol.All(cv.ensure_list, [_MEDIA_ID], vol.Length(max=50)),
 }
 # they write the config entry; a media-folder rescan is harmless for any user
 ADMIN_SERVICES = ("rescan_apps", "set_mode_videos")
@@ -122,13 +123,13 @@ SERVICES: dict[str, tuple[dict, Any]] = {
                      lambda hub, d: hub.activity.set(**d)),
     "channel": ({vol.Required("number"): vol.All(cv.string, vol.Match(r"^\d{1,4}\Z"))},
                 lambda hub, d: hub.channel(**d)),
-    "ambience_start": ({vol.Required("mode"): cv.slug, vol.Optional("video"): _MEDIA_ID},
+    "ambience_start": ({vol.Required("mode"): _SLUG, vol.Optional("video"): _MEDIA_ID},
                        lambda hub, d: hub.ambience.start(d["mode"], video=d.get("video"))),
     "ambience_stop": ({}, lambda hub, d: hub.ambience.stop()),
     "ambience_update": (COMPOSITION, lambda hub, d: hub.ambience.update(dict(d))),
-    "save_mode": ({vol.Required("mode"): cv.slug, **COMPOSITION},
+    "save_mode": ({vol.Required("mode"): _SLUG, **COMPOSITION},
                   lambda hub, d: hub.ambience.save_mode(d["mode"], {k: v for k, v in d.items() if k != "mode"})),
-    "set_mode_videos": ({vol.Required("mode"): cv.slug, vol.Required("videos"): vol.All(cv.ensure_list, [{
+    "set_mode_videos": ({vol.Required("mode"): _SLUG, vol.Required("videos"): vol.All(cv.ensure_list, [{
                             # Configure > Ambience lists the videos as name=link
                             vol.Optional("name"): vol.All(_text, vol.Match(r"[^=]+\Z", msg="a video name cannot contain =")),
                             vol.Required("url"): _text}], vol.Length(max=50))},
@@ -144,7 +145,7 @@ SERVICES: dict[str, tuple[dict, Any]] = {
     "play_library_item": ({vol.Required("server"): vol.In(("plex", "jellyfin")),
                            vol.Required("item_id"): vol.Match(r"^[A-Za-z0-9-]{1,64}\Z")},
                           lambda hub, d: hub.play_library_item(**d)),
-    "pc_open": ({vol.Required("client"): cv.slug}, lambda hub, d: hub.pc_open(**d)),
+    "pc_open": ({vol.Required("client"): _SLUG}, lambda hub, d: hub.pc_open(**d)),
     "pc_close": ({}, lambda hub, d: hub.pc_close()),
 }
 
