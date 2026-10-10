@@ -35,9 +35,10 @@ class _PCClient:
                        timeout: aiohttp.ClientTimeout = _TIMEOUT) -> dict:
         try:
             async with self._session.request(
-                method, f"{self._base}{path}", json=body, headers=self._headers, timeout=timeout
+                method, f"{self._base}{path}", json=body, headers=self._headers, timeout=timeout,
+                allow_redirects=False,  # the token must never follow a redirect; 3xx is an error
             ) as resp:
-                if resp.status >= 400:
+                if resp.status >= 300:
                     msg = _REJECTED.get(resp.status, "Media PC request failed")
                     if resp.status == 409:
                         try:

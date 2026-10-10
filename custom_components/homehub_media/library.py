@@ -79,8 +79,11 @@ class _Server:
     async def _req(self, path: str, params: dict | None = None, method: str = "GET", accept: str = "application/json"):
         try:
             async with async_get_clientsession(self.hass).request(
-                method, self._url + path, params=params, headers={**self._headers, "Accept": accept}, timeout=TIMEOUT
+                method, self._url + path, params=params, headers={**self._headers, "Accept": accept}, timeout=TIMEOUT,
+                allow_redirects=False,  # the token header must never follow a redirect to another host
             ) as resp:
+                if 300 <= resp.status < 400:
+                    raise HomeAssistantError(f"{self.name} {path}: the server redirected; set its final URL")
                 resp.raise_for_status()
                 image = accept.startswith("image/")
                 # checked before reading the body: never buffer or relay non-images through HA's origin
