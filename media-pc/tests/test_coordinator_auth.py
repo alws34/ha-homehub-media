@@ -164,6 +164,18 @@ class CoordinatorTest(unittest.TestCase):
         self.assertEqual(request(port, "POST", "/v1/open/sonarr"), 200)
         self.assertEqual(systemctl.active, {"sonarr-browser.service"})
 
+    def test_409_answers_carry_only_a_short_code(self):
+        def answer(port, method, path):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            c.request(method, path, headers={"Host": f"127.0.0.1:{port}", "Authorization": f"Bearer {TOKEN}"})
+            resp = c.getresponse()
+            return resp.status, json.loads(resp.read())
+        self.assertEqual(answer(self.serve(FakeSystemctl()), "POST", "/v1/open/nope"), (409, {"error": "unknown_client"}))
+        self.assertEqual(answer(self.serve(FakeSystemctl(error=FileNotFoundError("/usr/bin/systemctl"))), "GET",
+                                "/v1/status"), (409, {"error": "unavailable"}))
+        self.assertEqual(answer(self.serve(FakeSystemctl()), "POST", "/v1/remote/up"),
+                         (409, {"error": "client_inactive"}))
+
     def test_systemctl_missing_or_timing_out_is_409(self):
         for error in (FileNotFoundError("systemctl"), subprocess.TimeoutExpired("systemctl", 20)):
             self.assertEqual(request(self.serve(FakeSystemctl(error=error)), "GET", "/v1/status"), 409)
