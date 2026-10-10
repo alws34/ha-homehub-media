@@ -10,7 +10,7 @@
           "mac": "MAC address"
         },
         "data_description": {
-          "host": "IP address or host name of the TV, for example 192.168.1.50.",
+          "host": "IP address or host name of the TV, for example 192.0.2.50.",
           "mac": "Optional. Lets HomeHub turn the TV on with Wake-on-LAN. Read from the TV when left empty."
         }
       },
@@ -92,7 +92,7 @@
         "data_description": {
           "entity": "A media player for the TV, for example from the Samsung Smart TV integration. Needed to switch inputs by source name and to read the volume.",
           "app_entity": "An entity whose state is the app running on the TV, if you have one.",
-          "base_url": "How the TV reaches Home Assistant to show ambience, for example http://192.168.1.10:8123. Leave empty to use the internal URL."
+          "base_url": "How the TV reaches Home Assistant to show ambience, for example http://192.0.2.10:8123. Leave empty to use the internal URL."
         }
       },
       "apps": {
@@ -128,7 +128,7 @@
           "prefill": "Use the Plex integration's server"
         },
         "data_description": {
-          "url": "For example http://192.168.1.20:32400.",
+          "url": "For example http://192.0.2.20:32400.",
           "token": "Your Plex token (X-Plex-Token). Leave empty to keep the saved token for the same server address.",
           "player": "Optional. Only follow players whose name contains this text, for example Samsung.",
           "prefill": "Copies the server URL and token from the Plex integration already set up in Home Assistant. Only used when ticked."
@@ -142,7 +142,7 @@
           "api_key": "API key"
         },
         "data_description": {
-          "url": "For example http://192.168.1.20:8096.",
+          "url": "For example http://192.0.2.20:8096.",
           "api_key": "Create one in the Jellyfin dashboard under API Keys. Leave empty to keep the saved key for the same server address."
         }
       },
