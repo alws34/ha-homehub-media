@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 import socket
@@ -37,6 +38,7 @@ from websockets.exceptions import WebSocketException
 
 from .catalog import YT_ID_RE
 from .const import APP_CATALOG, CLIENT_NAME, TEXT_MAX
+from .library import read_capped
 
 KEY_RE = re.compile(r"KEY_[A-Z0-9_]{1,32}")
 APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -178,7 +180,7 @@ class SamsungTV:
                     return None
                 if resp.status >= 400:
                     raise HomeAssistantError(f"TV returned HTTP {resp.status}")
-                return await resp.json(content_type=None) if method == "GET" else True
+                return json.loads(await read_capped(resp)) if method == "GET" else True
         except (aiohttp.ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect("TV is off or unreachable") from err
 
@@ -254,7 +256,7 @@ class SamsungTV:
             async with async_get_clientsession(self.hass).request(
                 method, url, data=data, headers=headers, timeout=REST_TIMEOUT
             ) as resp:
-                return resp.status, await resp.text()
+                return resp.status, (await read_capped(resp)).decode(errors="replace")
         except (aiohttp.ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect("TV is off or unreachable") from err
 

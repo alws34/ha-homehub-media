@@ -24,6 +24,7 @@ ID_RE = re.compile(r"[A-Za-z0-9-]{1,64}")
 PLEX_PATH_RE = re.compile(r"/library/metadata/\d+/(?:thumb|art)/\d+", re.ASCII)  # the only paths art keys may reach
 ART = "/api/homehub_media/art"
 ART_MAX = 5 * 1024 * 1024  # bytes of one proxied image
+BODY_MAX = 1024 * 1024  # bytes of one JSON or text answer
 TICKS = 10_000_000  # Jellyfin ticks per second
 # request failures plus malformed server payloads; messages never contain credentials
 FAILURES = (HomeAssistantError, LookupError, TypeError, AttributeError, ValueError)
@@ -31,6 +32,18 @@ FAILURES = (HomeAssistantError, LookupError, TypeError, AttributeError, ValueErr
 
 class InvalidAuth(HomeAssistantError):
     """The server rejected the token / API key (HTTP 401/403)."""
+
+
+async def read_capped(resp: aiohttp.ClientResponse, limit: int = BODY_MAX) -> bytes:
+    """The body, at most `limit` bytes (memory stays bounded without a Content-Length); ValueError past it."""
+    if int(resp.headers.get("Content-Length") or 0) > limit:
+        raise ValueError("response too large")
+    body = bytearray()
+    async for chunk in resp.content.iter_chunked(65536):
+        body += chunk
+        if len(body) > limit:
+            raise ValueError("response too large")
+    return bytes(body)
 
 
 def _check_id(value: str) -> str:
@@ -68,19 +81,13 @@ class _Server:
                 method, self._url + path, params=params, headers={**self._headers, "Accept": accept}, timeout=TIMEOUT
             ) as resp:
                 resp.raise_for_status()
-                if not accept.startswith("image/"):
-                    return await resp.read(), resp.content_type
+                image = accept.startswith("image/")
                 # checked before reading the body: never buffer or relay non-images through HA's origin
-                if not resp.content_type.startswith("image/"):
+                if image and not resp.content_type.startswith("image/"):
                     raise HomeAssistantError(f"{self.name} {path}: not an image")
-                if int(resp.headers.get("Content-Length") or 0) > ART_MAX:
-                    raise HomeAssistantError(f"{self.name} {path}: image too large")
-                body = bytearray()
-                async for chunk in resp.content.iter_chunked(65536):  # memory stays bounded without a length
-                    body += chunk
-                    if len(body) > ART_MAX:
-                        raise HomeAssistantError(f"{self.name} {path}: image too large")
-                return bytes(body), resp.content_type
+                return await read_capped(resp, ART_MAX if image else BODY_MAX), resp.content_type
+        except ValueError as err:  # read_capped's own message
+            raise HomeAssistantError(f"{self.name} {path}: {err}") from None
         except (aiohttp.ClientError, TimeoutError) as err:
             status = getattr(err, "status", None)
             raise (InvalidAuth if status in (401, 403) else HomeAssistantError)(

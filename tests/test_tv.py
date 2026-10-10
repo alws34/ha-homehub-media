@@ -17,6 +17,7 @@ from yarl import URL
 
 from custom_components.homehub_media import tv as tvmod
 from custom_components.homehub_media.const import APP_CATALOG
+from custom_components.homehub_media.library import BODY_MAX
 
 BASE = "http://192.0.2.1:8001/api/v2/applications/"
 DIAL = "http://192.0.2.1:8080/ws/apps/YouTube"
@@ -530,3 +531,14 @@ async def test_pair(hass, monkeypatch):
     monkeypatch.setattr(tvmod, "SamsungTVWSAsyncRemote", Unreachable)
     with pytest.raises(tvmod.CannotConnect):
         await tv.pair()
+
+
+async def test_rest_and_dial_answers_are_size_capped(hass, aioclient_mock):
+    huge = b'{"device": {"PowerState": "on"}}' + b" " * BODY_MAX
+    aioclient_mock.get("http://192.0.2.1:8001/api/v2/", content=huge)
+    aioclient_mock.get(DIAL, content=b"<screenId>SCREEN</screenId>" + b" " * BODY_MAX)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    with pytest.raises(tvmod.CannotConnect):
+        await tv.device_info()
+    with pytest.raises(tvmod.CannotConnect):
+        await tv._dial("GET")

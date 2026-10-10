@@ -29,6 +29,7 @@ from probatio import to_openapi
 
 from .const import ACTIVITIES, APP_CATALOG, COMMANDS, DOMAIN, TEXT_MAX
 from .hub import loaded_hub
+from .library import read_capped
 
 API_ID = f"{DOMAIN}_tools"
 CLAUDE_MODEL = "claude-opus-5-5"
@@ -130,7 +131,7 @@ def _api_errors() -> Iterator[None]:
     """Network/SDK failures -> HomeAssistantError("invalid_auth"|"cannot_connect"); raw errors never leak."""
     try:
         yield
-    except (aiohttp.ClientError, TimeoutError, *_sdk_errors()) as err:
+    except (aiohttp.ClientError, TimeoutError, ValueError, *_sdk_errors()) as err:  # ValueError: bad or huge JSON
         status = getattr(err, "status_code", None) or getattr(err, "status", None)
         raise HomeAssistantError("invalid_auth" if status in (401, 403) else "cannot_connect") from err
 
@@ -169,7 +170,7 @@ async def list_models(hass: HomeAssistant, provider: str, url: str | None, api_k
             async with async_get_clientsession(hass).get(
                     f"{url.rstrip('/')}/api/tags", timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 resp.raise_for_status()
-                return [m["name"] for m in (await resp.json()).get("models", [])]
+                return [m["name"] for m in json.loads(await read_capped(resp)).get("models", [])]
         client = await _client(hass, {"provider": provider, "url": url, "api_key": api_key})
         return sorted([m.id async for m in client.with_options(timeout=10, max_retries=0).models.list()])
 
