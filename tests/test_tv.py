@@ -544,6 +544,14 @@ async def test_rest_and_dial_answers_are_size_capped(hass, aioclient_mock):
         await tv._dial("GET")
 
 
+async def test_close_ends_the_lounge_session(hass, aioclient_mock, lounge):
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    await tv.play_youtube(VID, "111299001912")
+    sub, api = tv._yt_sub, lounge.made[0]
+    await tv.close()  # unload: the subscription task is cancelled and awaited, the session disconnected
+    assert sub.done() and api.disconnected and tv._yt_api is tv._yt_sub is tv._yt_video is None
+
+
 async def test_a_hung_lounge_disconnect_does_not_hold_the_lock(hass, aioclient_mock, lounge, monkeypatch):
     monkeypatch.setattr(tvmod, "YT_STOP_SECS", 0.01)
     tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)

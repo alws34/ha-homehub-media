@@ -82,7 +82,8 @@ pure helpers      catalog.py (scanning, link parsing, composition validation) ·
   1. runs the unsubscribe callbacks in reverse order;
   2. ambience shutdown, which stops the mode and restores the lights;
   3. activity shutdown;
-  4. `tv.close()`.
+  4. `tv.close()`: ends the YouTube Lounge session (cancels and awaits its subscription task), then closes the
+     WebSocket.
 
   Every timer, interval, listener and background task must be registered so that this path cancels it.
 - **Options changes** reload the entry (`OptionsFlowWithReload`). There is no update listener. Code that writes
