@@ -159,3 +159,14 @@ async def test_shutdown_cancels_running_request(hass):
     await am.async_shutdown()
     await asyncio.wait_for(pending, 1)  # superseded caller returns quietly
     assert am.current == "off" and not hub.tv.send_key.await_count
+
+
+async def test_a_hung_service_call_is_a_failed_step(hass, monkeypatch, caplog):
+    monkeypatch.setattr(activity, "SERVICE_SECS", 0.05)
+    async def hang(call): await asyncio.Event().wait()
+    hass.services.async_register("media_player", "volume_set", hang)
+    hass.states.async_set("media_player.tv", "on")
+    am = ActivityManager(hass, make_hub({"volume": VOL, "tv": {"entity": "media_player.tv"}}))
+    async with asyncio.timeout(5):
+        await am.set_quiet(True)
+    assert "media_player.volume_set did not finish" in caplog.text

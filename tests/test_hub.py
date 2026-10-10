@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -5,6 +6,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
+from custom_components.homehub_media import activity
 from custom_components.homehub_media import hub as hub_mod
 from custom_components.homehub_media.const import DOMAIN
 from custom_components.homehub_media.hub import Hub
@@ -279,3 +281,13 @@ async def test_unload_stops_everything(hass, setup_entry):
     assert await hass.config_entries.async_unload(setup_entry.entry_id)
     hub.tv.close.assert_awaited_once()
     assert hub.ambience._unsub_idle is None and hub._unsubs == []
+
+
+async def test_a_hung_tv_entity_call_times_out(hass, monkeypatch):
+    monkeypatch.setattr(activity, "SERVICE_SECS", 0.05)
+    async def hang(call): await asyncio.Event().wait()
+    hass.services.async_register("media_player", "volume_set", hang)
+    hub = make_hub(hass, {**OPTS, "tv": {"entity": "media_player.tv"}})
+    async with asyncio.timeout(5):
+        with pytest.raises(HomeAssistantError, match="did not finish"):
+            await hub.set_volume(30)

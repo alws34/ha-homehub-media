@@ -25,6 +25,7 @@ PLEX_PATH_RE = re.compile(r"/library/metadata/\d+/(?:thumb|art)/\d+", re.ASCII) 
 ART = "/api/homehub_media/art"
 ART_MAX = 5 * 1024 * 1024  # bytes of one proxied image
 BODY_MAX = 1024 * 1024  # bytes of one JSON or text answer
+PLAY_SECS = 15  # the core Plex player's play_media
 TICKS = 10_000_000  # Jellyfin ticks per second
 # request failures plus malformed server payloads; messages never contain credentials
 FAILURES = (HomeAssistantError, LookupError, TypeError, AttributeError, ValueError)
@@ -169,10 +170,11 @@ class PlexServer(_Server):
         entity = players[0][0]
         try:
             machine = (await self._json("/identity"))["MediaContainer"]["machineIdentifier"]
-            await self.hass.services.async_call("media_player", "play_media", {
-                "entity_id": entity, "media_content_type": "movie",
-                "media_content_id": f"plex://{machine}/{item_id}?resume=1"}, blocking=True)
-        except FAILURES as err:
+            async with asyncio.timeout(PLAY_SECS):
+                await self.hass.services.async_call("media_player", "play_media", {
+                    "entity_id": entity, "media_content_type": "movie",
+                    "media_content_id": f"plex://{machine}/{item_id}?resume=1"}, blocking=True)
+        except (*FAILURES, TimeoutError) as err:
             _LOGGER.debug("plex play failed: %s", err)  # caller retries while the TV app starts
             return False
         return True

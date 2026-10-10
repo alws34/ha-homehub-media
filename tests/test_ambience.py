@@ -8,6 +8,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
+from custom_components.homehub_media import activity
 from custom_components.homehub_media import catalog as cat
 from custom_components.homehub_media.activity import ActivityManager
 from custom_components.homehub_media.ambience import STATE_PATH, AmbienceManager
@@ -563,3 +564,16 @@ async def test_start_plays_the_given_video_and_the_snapshot_shows_it(hass, monke
     assert am.mode == "chill"  # a bad video changes nothing
     await am.stop()
     assert am.snapshot()["visual"] is None
+
+
+async def test_a_hung_light_call_cannot_hold_the_lock(hass, monkeypatch, caplog):
+    monkeypatch.setattr(activity, "SERVICE_SECS", 0.05)
+    async def hang(call): await asyncio.Event().wait()
+    async_mock_service(hass, "scene", "create")
+    hass.services.async_register("scene", "turn_on", hang)  # the mode's scene and the restore both hang
+    hass.states.async_set("scene.chill", "scening", {"entity_id": ["light.a"]})
+    am = await manager(hass, chill(scene="scene.chill", lights_only=True))
+    async with asyncio.timeout(5):
+        with pytest.raises(HomeAssistantError, match="scene.turn_on did not finish"):
+            await am.start("chill")
+    assert am.mode == "off" and not am._lock.locked() and "Could not restore lights" in caplog.text

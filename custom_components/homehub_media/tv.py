@@ -43,11 +43,13 @@ from .library import read_capped
 KEY_RE = re.compile(r"KEY_[A-Z0-9_]{1,32}")
 APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 REST_TIMEOUT = aiohttp.ClientTimeout(total=5)  # REST (8001) and DIAL (8080)
+WS_SEND_SECS = 15  # one WebSocket send; a held key waits up to 10 s inside it
 WS_ERRORS = (ConnectionFailure, WebSocketException, OSError)
 URL_VISIBLE_SECS = 5  # wait for the browser to come to the front after a URL launch
 YT_ORIGIN = "package:com.google.android.youtube"  # without it the TV's DIAL server answers 403
 # ponytail: tuning knobs. A warm switch reports the new video in ~2 s; a cold start may drop the lounge session.
-YT_START_SECS, YT_ACK_SECS, YT_PAIR_SECS = 20, 5, 10  # whole start, one play_video's NowPlaying, DIAL screenId
+# whole start, one play_video's NowPlaying, DIAL screenId, lounge disconnect
+YT_START_SECS, YT_ACK_SECS, YT_PAIR_SECS, YT_STOP_SECS = 20, 5, 10, 5
 # what pyytlounge raises when the session or YouTube's lounge server fails (it re-raises parse errors as they are)
 LOUNGE_ERRORS = (aiohttp.ClientError, TimeoutError, LookupError, ValueError, NotConnectedException,
                  NotLinkedException, NotPairedException, NotSupportedException)
@@ -161,7 +163,8 @@ class SamsungTV:
                     if self._remote.token != self.token:  # TV rotated the token; Hub persists it
                         self.token = self._remote.token
                         self._notify()
-                await self._remote.send_commands(list(commands))
+                async with asyncio.timeout(WS_SEND_SECS):  # a hung TV must not hold the lock
+                    await self._remote.send_commands(list(commands))
             except WS_ERRORS as err:
                 self._remote = None
                 self._set_flag("available", False)
@@ -366,8 +369,9 @@ class SamsungTV:
         if self._yt_sub:
             self._yt_sub.cancel()
         if api and api.connected():
-            with contextlib.suppress(*LOUNGE_ERRORS):
-                await api.disconnect()
+            with contextlib.suppress(*LOUNGE_ERRORS):  # incl. TimeoutError: never hold the lock
+                async with asyncio.timeout(YT_STOP_SECS):
+                    await api.disconnect()
 
     async def stop_youtube(self, app_id: str) -> None:
         """End the lounge session, then close YouTube over DIAL; REST (YouTube's Tizen `app_id`) when DIAL fails."""

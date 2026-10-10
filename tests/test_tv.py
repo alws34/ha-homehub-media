@@ -542,3 +542,26 @@ async def test_rest_and_dial_answers_are_size_capped(hass, aioclient_mock):
         await tv.device_info()
     with pytest.raises(tvmod.CannotConnect):
         await tv._dial("GET")
+
+
+async def test_a_hung_lounge_disconnect_does_not_hold_the_lock(hass, aioclient_mock, lounge, monkeypatch):
+    monkeypatch.setattr(tvmod, "YT_STOP_SECS", 0.01)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    await tv.play_youtube(VID, "111299001912")
+    async def hang(): await asyncio.Event().wait()
+    lounge.made[0].disconnect = hang
+    async with asyncio.timeout(5):
+        await tv.stop_youtube("111299001912")
+    assert not tv._yt_lock.locked() and tv._yt_api is None
+
+
+async def test_a_hung_websocket_send_does_not_hold_the_lock(hass, fake_remote, monkeypatch):
+    monkeypatch.setattr(tvmod, "WS_SEND_SECS", 0.01)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    await tv.send_key("KEY_HOME")
+    async def hang(cmds, key_press_delay=None): await asyncio.Event().wait()
+    fake_remote["r"].send_commands = hang
+    async with asyncio.timeout(5):
+        with pytest.raises(tvmod.CannotConnect):
+            await tv.send_key("KEY_HOME")
+    assert not tv._lock.locked() and not tv.available

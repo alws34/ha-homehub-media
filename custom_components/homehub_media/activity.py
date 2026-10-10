@@ -15,6 +15,16 @@ VERIFY_SECS = 2.0       # wait for the TV entity's `source` after each select_so
 POWER_WAIT_SECS = 10.0  # wait for the TV to report on
 SETTLE_SECS = 3.0       # cold TV: let Tizen settle before keys / input switching (PC:1585-1590)
 OFF_STATES = ("off", "unavailable", "unknown", "none")
+SERVICE_SECS = 15       # one HA service call (TV entity, box remote, lights)
+
+
+async def call_service(hass, domain: str, service: str, data: dict) -> None:
+    """A blocking HA service call bounded by SERVICE_SECS; HomeAssistantError when it runs over."""
+    try:
+        async with asyncio.timeout(SERVICE_SECS):
+            await hass.services.async_call(domain, service, data, blocking=True)
+    except TimeoutError:
+        raise HomeAssistantError(f"{domain}.{service} did not finish in {SERVICE_SECS} s") from None
 
 
 class ActivityManager:
@@ -145,7 +155,7 @@ class ActivityManager:
         return ok
 
     async def _svc(self, domain: str, service: str, entity_id: str | None, **data) -> None:
-        await self._try(self.hass.services.async_call(domain, service, {"entity_id": entity_id, **data}, blocking=True))
+        await self._try(call_service(self.hass, domain, service, {"entity_id": entity_id, **data}))
 
     @staticmethod
     async def _try(aw) -> None:
