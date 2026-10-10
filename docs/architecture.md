@@ -70,7 +70,8 @@ pure helpers      catalog.py (scanning, link parsing, composition validation) ·
 ## Lifecycle
 
 - **`async_setup`** (once per HA start): registers the websocket commands, services and views (`api.async_register`),
-  the static path `/homehub_media_static` and the card's extra JS URL, and the samsungtvws log filter.
+  the static path `/homehub_media_static` and the card's extra JS URL, and the samsungtvws and pyytlounge log
+  filter.
 - **`async_setup_entry`** runs in this order:
   1. creates `Hub` and registers `async_on_unload(hub.async_stop)`;
   2. awaits `hub.async_start()`, which loads the Store;

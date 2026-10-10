@@ -275,7 +275,8 @@ class SamsungTV:
                 return self._yt_api
             if self._yt_sub:
                 self._yt_sub.cancel()
-            api = YtLoungeApi(CLIENT_NAME, LoungeListener(self._yt_event), _LOGGER)
+            # pyytlounge logs the lounge token: its logger goes through __init__'s secret filter
+            api = YtLoungeApi(CLIENT_NAME, LoungeListener(self._yt_event), logging.getLogger("pyytlounge"))
             api.session = async_get_clientsession(self.hass)  # HA's shared session: nothing to close
             ok = False
             if self.lounge_auth:

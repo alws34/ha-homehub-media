@@ -19,6 +19,21 @@ async def test_tv_library_secrets_not_logged(hass, setup_entry, caplog):
     assert caplog.messages == ["Connection closed."]
 
 
+async def test_youtube_lounge_secrets_not_logged(hass, setup_entry, caplog):
+    log = logging.getLogger("pyytlounge")  # the logger tv.py hands to YtLoungeApi
+    with caplog.at_level(logging.DEBUG, "pyytlounge"):
+        log.info("Refreshed auth, lounge id token %s", "SECRET1")
+        log.info("Subscribing to lounge id %s", "SECRET2")
+        log.debug("Unprocessed event %s %s", "loungeStatus", [{"screenId": "SECRET3"}])
+        try:
+            raise ValueError("400, url='https://www.youtube.com/api/lounge/bc/bind?loungeIdToken=SECRET4'")
+        except ValueError:
+            log.exception("Command failed")  # the secret is only in the traceback
+        log.info("Subscribe completed, status %i %s", 200, "OK")
+    assert caplog.messages == ["Subscribe completed, status 200 OK"]
+    assert "SECRET" not in caplog.text
+
+
 async def test_remove_entry_deletes_stored_compositions(hass, setup_entry, hass_storage):
     await hass.services.async_call(DOMAIN, "set_favorite", {"kind": "visual", "media_id": "rain", "favorite": True},
                                    blocking=True)

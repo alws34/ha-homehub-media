@@ -301,6 +301,7 @@ class FakeLounge:
 
     def __init__(self, name, listener, logger=None):
         self.listener, self.loaded, self.paired, self.played, self.autoplay = listener, None, None, [], None
+        self.logger = logger
         self.screen, self.token, self.live, self.disconnected, self.seeks = None, None, False, False, []
         self.auth = SimpleNamespace(serialize=lambda: {"version": 0, "screenId": self.screen,
                                                        "loungeIdToken": self.token, "refreshToken": None, "expiry": None})
@@ -359,6 +360,7 @@ async def test_play_youtube_pairs_through_the_screen_id_and_persists_the_auth(ha
     await tv.play_youtube(VID, "111299001912")
     api, = lounge.made
     assert api.paired == "SCREEN" and api.played == [VID] and api.autoplay is False
+    assert api.logger.name == "pyytlounge"  # the logger __init__'s secret filter covers
     assert tv.lounge_auth == api.auth.serialize() == {"version": 0, "screenId": "SCREEN", "loungeIdToken": "fresh",
                                                       "refreshToken": None, "expiry": None}  # never store_auth_state()
     assert changes == [1]  # the Hub persists it
