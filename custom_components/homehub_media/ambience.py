@@ -212,6 +212,9 @@ class AmbienceManager:
         if error:
             raise error
 
+    def has_youtube(self, video_id: str) -> bool:
+        return any(v.get("youtube_id") == video_id for v in self._catalog["visuals"])
+
     def catalog(self) -> dict:
         # ponytail: TV previews are unsigned /media/local/... paths; the ws handler signs them per caller (K5)
         return {key: [{k: v for k, v in item.items() if k not in _SERVER_ONLY} for item in items]

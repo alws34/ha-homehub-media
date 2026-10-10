@@ -118,10 +118,16 @@ async def test_library_signs_art(hass, hass_ws_client, setup_entry):
 
 
 async def test_art_proxy_youtube_thumbnail_falls_back_to_hq(hass, hass_client, setup_entry, aioclient_mock):
+    hub = setup_entry.runtime_data
+    client = await hass_client()
+    assert (await client.get("/api/homehub_media/art/youtube/B5unCXpegAw")).status == 404  # not in the catalog
+    assert aioclient_mock.call_count == 0  # HA fetched nothing
+    hub.options["ambience"] = {**hub.options["ambience"], "youtube": {"Star night": "https://youtu.be/B5unCXpegAw"}}
+    await hub.ambience.refresh_catalog()
+    assert hub.art_source("youtube", "B5unCXpegAw") is hub.youtube_art  # one client, not one per request
     thumbs = "https://i.ytimg.com/vi/B5unCXpegAw/"
     aioclient_mock.get(thumbs + "maxresdefault.jpg", status=404)
     aioclient_mock.get(thumbs + "hqdefault.jpg", content=b"jpg", headers={"Content-Type": "image/jpeg"})
-    client = await hass_client()
     resp = await client.get("/api/homehub_media/art/youtube/B5unCXpegAw")
     assert resp.status == 200 and await resp.read() == b"jpg" and resp.content_type == "image/jpeg"
     assert resp.headers["X-Content-Type-Options"] == "nosniff"

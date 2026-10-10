@@ -46,7 +46,7 @@ from .const import (
     VOLUME_COMMANDS,
 )
 from .keyboard import KeyboardBridge
-from .library import JellyfinServer, Library, PlexServer
+from .library import JellyfinServer, Library, PlexServer, YouTubeArt
 from .pc import AmbientPlayerClient, CoordinatorClient
 from .store import HomeHubStore
 from .tv import APP_ID_RE, PairingDenied, SamsungTV
@@ -109,6 +109,7 @@ class Hub:
         if j := srv.get("jellyfin"):
             servers.append(JellyfinServer(hass, j["url"], j["api_key"], j["user_id"], j.get("player")))
         self.library = Library(hass, servers, self.async_notify) if servers else None
+        self.youtube_art = YouTubeArt(hass)
         self.activity = ActivityManager(hass, self)
         self.ambience = AmbienceManager(hass, self, HomeHubStore(hass))
         self.apps = _apps(self.options.get(OPT_APPS))
@@ -171,6 +172,12 @@ class Hub:
         if self.activity.current != "tv":  # box, PC or off: no TV app in front any more
             self.current_app = None
         async_dispatcher_send(self.hass, SIGNAL_UPDATE)
+
+    def art_source(self, server: str, key: str):
+        """The client behind an art URL: Plex or Jellyfin, or YouTube only for a video in the ambience catalog."""
+        if server == "youtube":
+            return self.youtube_art if self.ambience.has_youtube(key) else None
+        return self.library and self.library.server(server)
 
     def sign_path(self, path: str, hours: int = 24) -> str:
         return sign(self.hass, path, hours=hours)
