@@ -52,6 +52,7 @@ async def test_plex_continue_normalised(hass, aioclient_mock):
     assert items[0]["subtitle"] == "Pilot" and abs(items[0]["progress"] - 0.2) < 1e-6
     assert items[0]["image"].startswith("/api/homehub_media/art/plex/")
     assert aioclient_mock.mock_calls[0][3]["X-Plex-Token"] == "tok"
+    assert aioclient_mock.mock_calls[0][1].query["X-Plex-Container-Size"] == "20"  # library rows are capped
 
 
 async def test_jellyfin_sessions_now_playing(hass, aioclient_mock):

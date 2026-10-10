@@ -27,6 +27,7 @@ ART_MAX = 5 * 1024 * 1024  # bytes of one proxied image
 BODY_MAX = 1024 * 1024  # bytes of one JSON or text answer
 PLAY_SECS = 15  # the core Plex player's play_media
 TICKS = 10_000_000  # Jellyfin ticks per second
+PLEX_PAGE = {"X-Plex-Container-Start": 0, "X-Plex-Container-Size": 20}  # library rows per list
 # request failures plus malformed server payloads; messages never contain credentials
 FAILURES = (HomeAssistantError, LookupError, TypeError, AttributeError, ValueError)
 
@@ -125,11 +126,10 @@ class PlexServer(_Server):
         }
 
     async def continue_watching(self) -> list[dict]:
-        return [self._norm(m) for m in await self._metadata("/hubs/continueWatching/items")]
+        return [self._norm(m) for m in await self._metadata("/hubs/continueWatching/items", PLEX_PAGE)]
 
     async def recently_added(self) -> list[dict]:
-        params = {"X-Plex-Container-Start": 0, "X-Plex-Container-Size": 20}
-        return [self._norm(m) for m in await self._metadata("/library/recentlyAdded", params)]
+        return [self._norm(m) for m in await self._metadata("/library/recentlyAdded", PLEX_PAGE)]
 
     async def sessions(self) -> list[dict]:
         out = []
