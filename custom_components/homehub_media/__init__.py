@@ -34,7 +34,10 @@ def _no_secrets(record: logging.LogRecord) -> bool:
     the lounge token or screen id. pyytlounge tracebacks (request URLs with the token) are stripped."""
     if record.name.startswith("pyytlounge"):
         record.exc_info = record.exc_text = record.stack_info = None
-    return not _SECRET_RE.search(record.getMessage())
+    text = record.getMessage()
+    if record.exc_info:  # samsungtvws: a traceback can carry the WS URL with the token
+        text += logging.Formatter().formatException(record.exc_info)
+    return not _SECRET_RE.search(text)
 
 
 def _platforms(hub: Hub) -> list[Platform]:
