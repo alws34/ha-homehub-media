@@ -38,7 +38,7 @@ from websockets.exceptions import WebSocketException
 
 from .catalog import YT_ID_RE
 from .const import APP_CATALOG, CLIENT_NAME, TEXT_MAX
-from .library import read_capped
+from .library import read_capped, why
 
 KEY_RE = re.compile(r"KEY_[A-Z0-9_]{1,32}")
 APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -347,12 +347,12 @@ class SamsungTV:
                 err: Exception = CannotConnect("YouTube lounge session ended")
             except (*LOUNGE_ERRORS, HomeAssistantError) as exc:
                 err = exc
-            _LOGGER.debug("YouTube start attempt failed: %r", err)
+            _LOGGER.debug("YouTube start attempt failed: %s", why(err))  # never the URL: it holds the token
             # a session opened before a cold-started app was ready stays "connected" but ignores plays: open a new one
             async with self._yt_lock:
                 await self._drop_lounge()
             if time.monotonic() > deadline:
-                raise HomeAssistantError("YouTube on the TV did not start the video") from err
+                raise HomeAssistantError("YouTube on the TV did not start the video") from None
             await asyncio.sleep(1)
 
     async def youtube_keepalive(self) -> None:
@@ -361,7 +361,7 @@ class SamsungTV:
             async with asyncio.timeout(YT_START_SECS):
                 await self._lounge()
         except (*LOUNGE_ERRORS, HomeAssistantError) as err:
-            _LOGGER.debug("YouTube lounge reconnect failed: %r", err)
+            _LOGGER.debug("YouTube lounge reconnect failed: %s", why(err))
 
     async def _drop_lounge(self) -> None:
         """End the lounge session (caller holds _yt_lock); the next _lounge() opens a new one."""

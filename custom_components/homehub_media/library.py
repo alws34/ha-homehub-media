@@ -48,6 +48,11 @@ async def read_capped(resp: aiohttp.ClientResponse, limit: int = BODY_MAX) -> by
     return bytes(body)
 
 
+def why(err: Exception) -> object:
+    """What failed, safe to log or show: an HTTP status or the error type, never a URL (may hold a token)."""
+    return getattr(err, "status", None) or type(err).__name__
+
+
 def _check_id(value: str) -> str:
     if not isinstance(value, str) or not ID_RE.fullmatch(value):
         raise ServiceValidationError("Invalid item id")
@@ -94,9 +99,8 @@ class _Server:
         except ValueError as err:  # read_capped's own message
             raise HomeAssistantError(f"{self.name} {path}: {err}") from None
         except (aiohttp.ClientError, TimeoutError) as err:
-            status = getattr(err, "status", None)
-            raise (InvalidAuth if status in (401, 403) else HomeAssistantError)(
-                f"{self.name} {path} failed: {status or type(err).__name__}") from None
+            raise (InvalidAuth if getattr(err, "status", None) in (401, 403) else HomeAssistantError)(
+                f"{self.name} {path} failed: {why(err)}") from None
 
     async def _json(self, path: str, params: dict | None = None):
         body, _ = await self._req(path, params)
