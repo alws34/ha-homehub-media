@@ -10,7 +10,7 @@ const ctx = { window: { __HOMEHUB_TEST__: true, customCards: [] }, customElement
               setTimeout, clearTimeout, performance };
 ctx.window.window = ctx.window;
 vm.createContext(ctx); vm.runInContext(src, ctx);
-const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeIds, nextId, modeVideos } = ctx.window.__homehubTest;
+const { esc, mixToVolumes, nextTarget, textRoute, canSeek, toggleIn, randomLabel, volumeSlider, modeIds, nextId, modeVideos, featuredMode } = ctx.window.__homehubTest;
 const plain = (v) => JSON.parse(JSON.stringify(v));  // values from the card's realm, for deepStrictEqual
 
 test("esc neutralises markup", () => {
@@ -182,4 +182,19 @@ test("controls take their depth from a neumorphic theme's soft-* tokens, with fl
     assert.ok(src.includes(`var(${token}, ${fallback})`), token);
   assert.match(src, /\.dpad \{[^}]*box-shadow: var\(--hh-up-lg\)/);
   assert.match(src, /\.ib \{[^}]*box-shadow: var\(--hh-up\)/);
+});
+
+test("top shelf: the playing mode, else the auto ambience pick, else the first mode", () => {
+  const modes = [{ id: "fireplace", name: "Fireplace" }, { id: "dinner", name: "Dinner" }, { id: "chill", name: "Chill" }];
+  assert.deepEqual(plain(featuredMode({ modes, mode: "dinner", daypart_mode: "chill" })), { m: modes[1], playing: true });
+  assert.deepEqual(plain(featuredMode({ modes, mode: "off", daypart_mode: "chill" })), { m: modes[2], playing: false });
+  assert.deepEqual(plain(featuredMode({ modes })), { m: modes[0], playing: false });
+  assert.deepEqual(plain(featuredMode({ modes: [], mode: "cat_tv" })), { m: { id: "cat_tv", name: "Cat Tv" }, playing: true });
+  assert.equal(featuredMode({}).m, null);
+});
+
+test("mode tiles start on tap and open the video editor on hold; a video tile plays that video", () => {
+  assert.match(src, /data-a="mode" data-v="\$\{esc\(m\.id\)\}"\$\{m\.lights_only \? "" : ` data-hold="edit"`\}/);
+  assert.match(src, /if \(el\.dataset\.hold === "edit"\) return this\._openEditor\(el\.dataset\.v\);/);
+  assert.match(src, /case "vid": return this\._call\("ambience_start", \{ mode: b\.dataset\.m, video: v \}\);/);
 });

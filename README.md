@@ -22,6 +22,7 @@ Control a Samsung TV, run ambience (video, soundtrack and lights), and browse Pl
   - A mode can switch on a lighting scene and flicker chosen lights like a fire. The previous lighting comes back when the mode stops. If Home Assistant restarts while a mode runs, the previous lighting cannot be restored, because the snapshot is kept only in memory.
   - Change the visual or soundtrack while a mode runs, mark favourites, and mix the two volumes.
   - Sleep timer that fades out, and time-of-day auto ambience.
+  - The **Ambience** tab is laid out like a TV home screen: large artwork of the playing mode (or the one auto ambience would start now) with Play or Stop, a row of modes, and a row of the mode's videos. Tap a mode to start it, or a video to play that one.
 - **Plex and Jellyfin**: Continue Watching and Recently Added rows. Tap a title to open the app on the TV and play it. A Now Playing strip shows the current session with play or pause, rewind, and fast forward buttons.
 - **Activities**: Off, Samsung TV, Streaming box, or Media PC. Switching to an activity turns the TV on, switches the TV input for the box or PC, sets the TV volume, and stops ambience that plays video or sound. Off turns the TV and box off and stops all ambience.
 - **Optional devices**: a streaming box on a TV input, an Ubuntu media PC for ambience and browser apps, and an ESP32 Bluetooth keyboard bridge.
@@ -148,7 +149,7 @@ To cap the output at 1080p, add `-vf "scale=-2:'min(1080,ih)'"` before `-c:v`.
 **Assign visuals and soundtracks to a mode**
 
 1. Open the **Ambience** tab in the card.
-2. Select the edit button (pencil) on the mode's tile. Lights-only modes have none.
+2. Hold the mode's tile, or select the videos button on the large artwork at the top while that mode is shown there. Lights-only modes have no editor.
 3. When ambience plays on the media PC, browse visuals and soundtracks with the arrows or by swiping, and tap one to use it. Set the on, loop, and random-start options and the mix.
 4. Select **Save settings**.
 
@@ -172,7 +173,7 @@ The videos appear in the card's visual carousel in the order you entered them, w
 
 **Edit a mode's videos in the card** (admin users)
 
-1. On the **Ambience** tab, select the edit button (pencil) on a mode, or **Videos** while the mode plays.
+1. On the **Ambience** tab, hold a mode's tile, or select the videos button on the large artwork at the top.
 2. Each of the mode's videos shows its thumbnail. The play button plays that video on the TV now, the pencil opens its name and link for editing, and the cross removes it (select **Undo** in the message to bring it back).
 3. To add a video, paste its link into **Paste a YouTube link…** and select **Add** or press Enter. The name is the video's YouTube title (its video ID if YouTube cannot be reached); you can change it with the pencil.
 
