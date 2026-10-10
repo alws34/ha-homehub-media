@@ -15,6 +15,10 @@ async def test_tv_library_secrets_not_logged(hass, setup_entry, caplog):
         log.debug("WS url %s", "wss://192.0.2.1:8002/api/v2/channels/samsung.remote.control?token=123")
         log.debug("SamsungTVWS websocket command: %s", '{"TypeOfRemote": "SendInputString"}')
         log.info("command %s", '{"metaTag": "http://192.0.2.9:8123/x?s=signed"}')
+        try:
+            raise OSError("server rejected WebSocket connection: wss://192.0.2.1:8002/x?token=123")
+        except OSError:
+            log.exception("Connect failed")  # the token is only in the traceback: the record is dropped
         log.debug("Connection closed.")
     assert caplog.messages == ["Connection closed."]
 
