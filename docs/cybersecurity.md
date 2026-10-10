@@ -76,8 +76,9 @@ The secrets are:
 3. **A blank secret field keeps the saved value only while the origin is unchanged** (scheme, host and port, or the
    LLM provider). A saved token must never be sent to a new host without the admin typing it again.
 4. **Secrets travel only in headers** (`X-Plex-Token`, `Authorization`, `X-HomeHub-Key`), never in query strings,
-   because query strings end up in logs and browser history. The exception is the TV WebSocket token, which is part
-   of the samsungtvws URL; see section 9.
+   because query strings end up in logs and browser history. The exceptions are the TV WebSocket token, which is
+   part of the samsungtvws URL, and the YouTube Lounge token, which the Lounge protocol (pyytlounge) sends in its
+   request URLs; see section 9.
 5. **Nothing secret goes in the repo.** That includes tokens, LAN addresses of real devices, and personal media.
    Tests use documentation addresses (`192.0.2.x`).
 
@@ -96,7 +97,10 @@ The secrets are:
   - **Any authenticated user** may use services that act on the TV, ambience, activities, library and their own
     modes and favourites.
   - **Admin only** (`ADMIN_SERVICES`, registered with `async_register_admin_service`): services that change the
-    integration's configuration (`entry.options` or `entry.data`) or install or rescan anything system-wide.
+    integration's configuration (`entry.options` or `entry.data`) or install anything. Today: `rescan_apps` (writes
+    the discovered apps) and `set_mode_videos` (writes the YouTube list). `refresh_catalog` only re-reads the media
+    folder or the media PC's catalog and changes no configuration, so any user may call it (the card's rescan
+    button does).
   - Admin rights are enforced server-side. Hiding a control in the card is not a security control.
 
 ## 5. Network egress
@@ -167,6 +171,7 @@ The secrets are:
 | Risk | Why it is accepted |
 |---|---|
 | The TV WebSocket uses TLS without certificate verification (samsungtvws `CERT_NONE`), and the token is part of the WS URL | Samsung TVs use self-signed certificates that cannot be pinned through the remote API. The token only controls the TV and can be revoked on the TV. The log filter redacts it. |
+| The YouTube Lounge token travels in pyytlounge's request URLs to YouTube | The Lounge protocol requires it and pyytlounge builds the requests. The requests go over HTTPS to YouTube only; the token only controls YouTube on this TV and is re-paired when it stops working. The log filter drops pyytlounge records that carry it. |
 | Media-PC, keyboard bridge and some Plex/Jellyfin traffic is plain HTTP on the LAN | These are LAN devices without TLS. Each uses its own token, the media PC has a mandatory firewall, and the README recommends HTTPS where it is available. |
 | Secrets are stored in plain text in HA's `.storage` | This is how Home Assistant stores config entries; protecting it is the host's job. |
 | Signed media URLs for the TV page last 24 h | The TV streams long files with range requests. The URLs are re-minted on every poll, and the page itself is bound to a 2-hour session. |
