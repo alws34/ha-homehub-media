@@ -95,7 +95,12 @@ POINTER_AXIS_FINISH = 0x01
 
 
 class CoordinatorError(RuntimeError):
-    """An expected failure safe to return without secrets."""
+    """An expected failure. Clients only ever see `code`; the message is logged."""
+
+    def __init__(self, message: str, code: str = "invalid_request"):
+        # code is one of: invalid_request, unknown_client, client_inactive, unavailable
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -302,7 +307,7 @@ class MutterRemoteInput:
         try:
             from gi.repository import Gio, GLib
         except (ImportError, ValueError) as exc:
-            raise CoordinatorError("GNOME remote-input support is unavailable") from exc
+            raise CoordinatorError("GNOME remote-input support is unavailable", "unavailable") from exc
 
         session = None
         started = False
@@ -349,12 +354,12 @@ class MutterRemoteInput:
             except CoordinatorError:
                 raise
             except Exception as exc:
-                raise CoordinatorError("GNOME remote-input session could not start") from exc
+                raise CoordinatorError("GNOME remote-input session could not start", "unavailable") from exc
             self._session = session
             self._gio = gio
             self._glib = glib
         if self._gio is None or self._glib is None:
-            raise CoordinatorError("GNOME remote-input session is incomplete")
+            raise CoordinatorError("GNOME remote-input session is incomplete", "unavailable")
         return self._session, self._gio, self._glib
 
     def close(self) -> None:
@@ -389,7 +394,7 @@ class MutterRemoteInput:
                 # obtains a fresh one. Do not automatically retry an input
                 # action, because that could duplicate a click or key press.
                 self.close()
-                raise CoordinatorError(failure_message) from exc
+                raise CoordinatorError(failure_message, "unavailable") from exc
 
     def _send_events(self, events: list[tuple[str, int]]) -> None:
         def send(session: object, gio: object, glib: object) -> None:
@@ -491,7 +496,7 @@ class Coordinator:
             )
         except (OSError, subprocess.SubprocessError) as exc:  # missing binary, timeout
             LOGGER.warning("systemctl --user %s %s failed: %s", action, unit, exc)
-            raise CoordinatorError("systemd user manager is unavailable") from exc
+            raise CoordinatorError("systemd user manager is unavailable", "unavailable") from exc
 
     def status(self) -> dict[str, object]:
         active_modes = []
@@ -516,7 +521,7 @@ class Coordinator:
     def open(self, mode: str) -> dict[str, object]:
         with self._lock:
             if mode not in self.config.clients:
-                raise CoordinatorError("Refusing unsupported Media Hub app")
+                raise CoordinatorError("Refusing unsupported Media Hub app", "unknown_client")
             current = self.status()
             if current["client_active"] and current["mode"] == mode:
                 return current
@@ -525,10 +530,10 @@ class Coordinator:
                 self._systemctl("stop", self.config.clients[active_mode].unit)
             result = self._systemctl("start", self.config.clients[mode].unit)
             if result.returncode != 0:
-                raise CoordinatorError("Media Hub client service did not start")
+                raise CoordinatorError("Media Hub client service did not start", "unavailable")
             current = self.status()
             if not current["client_active"] or current["mode"] != mode:
-                raise CoordinatorError("Media Hub client did not become active")
+                raise CoordinatorError("Media Hub client did not become active", "unavailable")
             return current
 
     def close(self) -> dict[str, object]:
@@ -538,15 +543,15 @@ class Coordinator:
             for active_mode in current["active_modes"]:
                 result = self._systemctl("stop", self.config.clients[active_mode].unit)
                 if result.returncode != 0:
-                    raise CoordinatorError("Media Hub client service did not stop")
+                    raise CoordinatorError("Media Hub client service did not stop", "unavailable")
             current = self.status()
             if current["client_active"]:
-                raise CoordinatorError("Media Hub client remained active")
+                raise CoordinatorError("Media Hub client remained active", "unavailable")
             return current
 
     def _input_for_active_client(self, current: dict[str, object]) -> object:
         if not current["client_active"]:
-            raise CoordinatorError("Media Hub client is not active")
+            raise CoordinatorError("Media Hub client is not active", "client_inactive")
         home_url = self.config.clients[str(current["mode"])].home_url
         remote_input = self._remote_input
         if isinstance(remote_input, MutterRemoteInput) and remote_input.home_url != home_url:
@@ -736,7 +741,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(HTTPStatus.NOT_FOUND, {"error": "not_found"})
         except CoordinatorError as exc:
-            self._send(HTTPStatus.CONFLICT, {"error": str(exc)})
+            LOGGER.info("%s %s refused: %s", self.command, self.path, exc)
+            self._send(HTTPStatus.CONFLICT, {"error": exc.code})
 
     def do_POST(self) -> None:
         body = self._guard()
@@ -781,7 +787,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(HTTPStatus.NOT_FOUND, {"error": "not_found"})
         except CoordinatorError as exc:
-            self._send(HTTPStatus.CONFLICT, {"error": str(exc)})
+            LOGGER.info("%s %s refused: %s", self.command, self.path, exc)
+            self._send(HTTPStatus.CONFLICT, {"error": exc.code})
 
 
 def parse_args() -> argparse.Namespace:
