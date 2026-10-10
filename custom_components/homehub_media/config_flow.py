@@ -206,6 +206,8 @@ async def _probe(call: Awaitable) -> tuple[Any, str | None]:
         return await call, None
     except (library.InvalidAuth, pc.PCAuthError):
         return None, "invalid_auth"
+    except library.Redirected:
+        return None, "redirected"
     except library.FAILURES:  # any HomeAssistantError (PCError included) or a malformed reply
         return None, "cannot_connect"
 

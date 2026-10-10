@@ -380,6 +380,7 @@
     "error": {
       "cannot_connect": "Could not connect. Check the address and that the device or service is running.",
       "invalid_auth": "The token, key or password was rejected.",
+      "redirected": "The server redirected. Enter its final address, for example the https:// one.",
       "invalid_url": "Enter a valid URL. Radio stations need one id=https://url per line.",
       "invalid_id": "Use app=id pairs with known apps and IDs of letters, digits, '.', '-' or '_'.",
       "invalid_host": "Enter a host name, an IPv4 address, or an IPv6 address in square brackets.",

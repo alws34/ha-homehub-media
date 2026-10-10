@@ -281,6 +281,17 @@ async def test_servers_invalid_auth(hass, entry, aioclient_mock):
     assert result["errors"] == {"base": "invalid_auth"}
 
 
+async def test_servers_redirected(hass, entry, aioclient_mock):
+    aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", status=301, headers={"Location": "https://plex.local/"})
+    aioclient_mock.get(f"{JF}/Users", status=302)
+    result = await _open(hass, entry, "servers", "plex")
+    result = await _submit(hass, result, {"url": PLEX, "token": "tok"})
+    assert result["errors"] == {"base": "redirected"}
+    result = await _open(hass, entry, "servers", "jellyfin")
+    result = await _submit(hass, result, {"url": JF, "api_key": "key"})
+    assert result["errors"] == {"base": "redirected"}
+
+
 async def test_plex_prefill_from_core_entry(hass, entry, aioclient_mock):
     MockConfigEntry(domain="plex", data={"server_config": {"url": PLEX, "token": "core"}}).add_to_hass(hass)
     aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", json={"MediaContainer": {}})
