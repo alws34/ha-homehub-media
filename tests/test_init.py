@@ -28,10 +28,10 @@ async def test_youtube_lounge_secrets_not_logged(hass, setup_entry, caplog):
         try:
             raise ValueError("400, url='https://www.youtube.com/api/lounge/bc/bind?loungeIdToken=SECRET4'")
         except ValueError:
-            log.exception("Command failed")  # the secret is only in the traceback
+            log.exception("Command failed")  # the secret is only in the traceback: kept, without it
         log.info("Subscribe completed, status %i %s", 200, "OK")
-    assert caplog.messages == ["Subscribe completed, status 200 OK"]
-    assert "SECRET" not in caplog.text
+    assert caplog.messages == ["Command failed", "Subscribe completed, status 200 OK"]
+    assert "SECRET" not in caplog.text and all(r.exc_info is None for r in caplog.records)
 
 
 async def test_remove_entry_deletes_stored_compositions(hass, setup_entry, hass_storage):
