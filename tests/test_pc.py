@@ -48,7 +48,11 @@ async def test_auth_rejection_is_typed(hass, aioclient_mock):
         (401, {}, "Media PC rejected the token"),
         (403, {}, "Media PC rejected the token"),
         (421, {}, "Media PC host name mismatch"),
-        (409, {"error": "unknown_client"}, "unknown_client"),
+        (409, {"error": "unknown_client"}, "That app is not set up on the media PC"),
+        (409, {"error": "client_inactive"}, "No app is open on the media PC"),
+        (409, {"error": "unknown_media"}, "The media PC does not have that file; rescan its media"),
+        (409, {"error": "unavailable"}, "The media PC cannot do that right now"),
+        (409, {"error": "some_new_code"}, "Media PC request failed"),
         (409, {"nope": 1}, "Media PC request failed"),
         (409, {"error": "<b>Traceback at /home/u</b>"}, "Media PC request failed"),  # codes only, never text
         (409, {"error": "a" * 41}, "Media PC request failed"),
