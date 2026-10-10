@@ -344,3 +344,12 @@ async def test_plex_play_gives_up_on_a_hung_player(hass, aioclient_mock, monkeyp
     aioclient_mock.get(f"{PLEX}/identity", json={"MediaContainer": {"machineIdentifier": "m"}})
     async with asyncio.timeout(5):
         assert await PlexServer(hass, PLEX, "tok", None).play("123") is False  # the caller retries
+
+
+async def test_authenticated_requests_do_not_follow_redirects(hass, redirector):
+    url = str(redirector.make_url("")).rstrip("/")
+    with pytest.raises(HomeAssistantError, match="redirect"):
+        await PlexServer(hass, url, "tok", None).continue_watching()
+    with pytest.raises(HomeAssistantError, match="redirect"):
+        await JellyfinServer(hass, url, "key", "u1", None).recently_added()
+    assert redirector.hits == []  # the token never went to the new location

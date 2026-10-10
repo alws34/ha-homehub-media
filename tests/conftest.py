@@ -31,3 +31,21 @@ async def setup_entry(hass, tmp_path):
         yield entry
         if entry.state is ConfigEntryState.LOADED:
             assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.fixture
+async def redirector(socket_enabled, aiohttp_server):
+    """A local server that redirects every request to /elsewhere; `.hits` are the requests that got there."""
+    from aiohttp import web
+
+    async def handle(request):
+        if request.path == "/elsewhere":
+            server.hits.append(dict(request.headers))
+            return web.json_response({})
+        raise web.HTTPTemporaryRedirect("/elsewhere")  # 307 keeps the method and body
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", handle)
+    server = await aiohttp_server(app)
+    server.hits = []
+    return server

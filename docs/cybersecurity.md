@@ -111,7 +111,8 @@ The secrets are:
   - Hosts and URLs come only from the admin-set options or from fixed hosts in code: `i.ytimg.com`, YouTube
     oEmbed and Lounge, the provider APIs, PyPI.
   - Proxied paths are regex-restricted (section 2).
-- **Redirects** are not followed to new hosts for authenticated requests.
+- **Redirects**: authenticated requests (Plex, Jellyfin, media PC, keyboard bridge) never follow a redirect
+  (`allow_redirects=False`), and a 3xx answer is an error.
 - **Use HTTPS when the target supports it.** The admin chooses the scheme for LAN devices; the README recommends
   HTTPS for Plex and Jellyfin.
 

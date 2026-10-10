@@ -160,3 +160,12 @@ async def test_response_size_is_capped(hass, aioclient_mock):
     aioclient_mock.get(f"{AP}/v2/status", content=b'{"state": "idle"}' + b" " * BODY_MAX)
     with pytest.raises(PCError):
         await AmbientPlayerClient(hass, "192.0.2.5", 8097, "t").status()
+
+
+async def test_authenticated_requests_do_not_follow_redirects(hass, redirector):
+    host, port = redirector.host, redirector.port
+    with pytest.raises(PCError):
+        await AmbientPlayerClient(hass, host, port, "t").status()
+    with pytest.raises(HomeAssistantError):
+        await KeyboardBridge(hass, f"{host}:{port}", "k").type("hi")
+    assert redirector.hits == []  # the token and key never went to the new location

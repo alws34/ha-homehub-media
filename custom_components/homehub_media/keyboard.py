@@ -24,9 +24,10 @@ class KeyboardBridge:
     async def _post(self, path: str, body: str) -> None:
         try:
             async with self._session.post(
-                f"{self._base}{path}", data=body, headers=self._headers, timeout=_TIMEOUT
+                f"{self._base}{path}", data=body, headers=self._headers, timeout=_TIMEOUT,
+                allow_redirects=False,  # the key must never follow a redirect; 3xx is an error
             ) as resp:
-                if resp.status >= 400:
+                if resp.status >= 300:
                     raise HomeAssistantError(
                         "Keyboard bridge rejected the shared key" if resp.status in (401, 403)
                         else "Keyboard bridge request failed"
