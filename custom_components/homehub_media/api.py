@@ -107,7 +107,7 @@ SERVICES: dict[str, tuple[dict, Any]] = {
                lambda hub, d: hub.remote(**d)),
     "send_key": ({vol.Required("key"): vol.Match(r"^KEY_[A-Z0-9_]{1,32}\Z"),
                   vol.Optional("hold_secs"): vol.All(vol.Coerce(float), vol.Range(0, 5))},
-                 lambda hub, d: hub.tv.send_key(**d)),
+                 lambda hub, d: hub.send_tv_key(**d)),
     "launch_app": ({vol.Required("app"): _APP}, lambda hub, d: hub.launch_app(**d)),
     "restart_app": ({vol.Required("app"): _APP}, lambda hub, d: hub.restart_app(**d)),
     "send_text": ({vol.Required("text"): _text, vol.Optional("target"): _TYPE_TARGET},
