@@ -11,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError,
 from custom_components.homehub_media.ambience import STATE_PATH
 from custom_components.homehub_media.api import _signed
 from custom_components.homehub_media.const import DOMAIN
+from custom_components.homehub_media.library import BODY_MAX
 
 
 async def test_subscribe_sends_snapshot(hass, hass_ws_client, setup_entry):
@@ -282,3 +283,11 @@ async def test_set_mode_videos_names_from_youtube(hass, setup_entry, aioclient_m
     assert names[1:] == [("Cozy fire " + "x" * 100)[:80], "fire2FIRE2f", "Taken (takenTAKEN1)", "textTEXTtex"]
     assert names[0] == "Taken"  # the same video under its existing name: kept, not renamed
     assert all(len(n) <= 80 and "=" not in n and "\n" not in n for n in names)
+
+
+async def test_set_mode_videos_ignores_an_oversized_youtube_answer(hass, setup_entry, aioclient_mock):
+    aioclient_mock.get(OEMBED, params={"url": "https://www.youtube.com/watch?v=hugeHUGEhug", "format": "json"},
+                       content=b'{"title": "Huge"}' + b" " * BODY_MAX)
+    await hass.services.async_call(DOMAIN, "set_mode_videos", {"mode": "chill", "videos": [{"url": "hugeHUGEhug"}]},
+                                   blocking=True)
+    assert list(setup_entry.options["ambience"]["youtube"]) == ["hugeHUGEhug"]  # its id, not the title

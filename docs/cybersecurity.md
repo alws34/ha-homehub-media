@@ -104,7 +104,7 @@ The secrets are:
 - **Every outbound request has a timeout.** Also bound any HA service call made while holding a lock, so a hung
   device or integration cannot hold the lock forever.
 - **Every response body read from a device or server is size-capped**:
-  - read through a bounded helper;
+  - read through the bounded helper `library.read_capped` (every client uses it);
   - art is capped at 5 MB and checked against the image content-type allowlist before the body is read;
   - JSON and text responses are capped at 1 MB.
 - **Non-admin users can never choose a destination host.**

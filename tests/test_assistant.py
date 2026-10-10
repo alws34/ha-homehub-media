@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.homehub_media import assistant as a
 from custom_components.homehub_media.const import DOMAIN
 from custom_components.homehub_media.hub import Hub
+from custom_components.homehub_media.library import BODY_MAX
 
 
 async def test_claude_tool_call_parsed(hass, monkeypatch):
@@ -182,3 +183,9 @@ async def test_media_titles_are_cleaned_for_the_model():
     hub = SimpleNamespace(library=SimpleNamespace(now_playing=[
         {"title": "A\u202eB\u200b\x00" + "x" * 200, "player": "TV\n", "position": 1.5, "image": "/art"}]))
     assert await a._now_playing(hub) == {"now_playing": [{"title": "AB" + "x" * 98, "player": "TV", "position": 1.5}]}
+
+
+async def test_list_models_ollama_answer_is_size_capped(hass, aioclient_mock):
+    aioclient_mock.get("http://o:11434/api/tags", content=b'{"models": []}' + b" " * BODY_MAX)
+    with pytest.raises(HomeAssistantError, match="cannot_connect"):
+        await a.list_models(hass, "ollama", "http://o:11434", None)

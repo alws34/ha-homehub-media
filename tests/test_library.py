@@ -10,7 +10,14 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed, async_mock_service
 
-from custom_components.homehub_media.library import ART_MAX, InvalidAuth, JellyfinServer, Library, PlexServer
+from custom_components.homehub_media.library import (
+    ART_MAX,
+    BODY_MAX,
+    InvalidAuth,
+    JellyfinServer,
+    Library,
+    PlexServer,
+)
 
 PLEX = "http://plex.local:32400"
 JF = "http://jf.local:8096"
@@ -317,3 +324,10 @@ async def test_library_start_polls_sessions_until_cancelled(hass, aioclient_mock
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
     await hass.async_block_till_done(wait_background_tasks=True)
     assert aioclient_mock.call_count == calls
+
+
+async def test_json_size_is_capped(hass, aioclient_mock):
+    huge = b'{"MediaContainer": {}}' + b" " * BODY_MAX  # valid JSON, one byte past the cap
+    aioclient_mock.get(f"{PLEX}/hubs/continueWatching/items", content=huge)
+    with pytest.raises(HomeAssistantError, match="too large"):
+        await PlexServer(hass, PLEX, "tok", None).continue_watching()

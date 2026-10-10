@@ -29,7 +29,7 @@ hub.py            composition root + command routing + card snapshot
         │
         ▼
 device clients    tv.py (Samsung WS 8002, REST 8001, DIAL 8080, YouTube Lounge, Wake-on-LAN)
-                  library.py (Plex, Jellyfin, YouTube thumbnails) · pc.py (media PC) · keyboard.py (ESP32)
+                  library.py (Plex, Jellyfin, YouTube thumbnails, `read_capped`) · pc.py (media PC) · keyboard.py (ESP32)
                   assistant.py (Ollama / OpenAI / Anthropic SDKs, LLM tools API)
 pure helpers      catalog.py (scanning, link parsing, composition validation) · const.py (contracts)
 ```

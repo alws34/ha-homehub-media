@@ -5,6 +5,7 @@ import pytest
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.homehub_media.keyboard import KeyboardBridge
+from custom_components.homehub_media.library import BODY_MAX
 from custom_components.homehub_media.pc import AmbientPlayerClient, CoordinatorClient, PCAuthError, PCError
 
 AP = "http://192.0.2.5:8097"
@@ -153,3 +154,9 @@ async def test_keyboard_errors(hass, aioclient_mock, kwargs, message):
     with pytest.raises(HomeAssistantError) as err:
         await KeyboardBridge(hass, "kbd.local", "shared").key("clear")
     assert str(err.value) == message
+
+
+async def test_response_size_is_capped(hass, aioclient_mock):
+    aioclient_mock.get(f"{AP}/v2/status", content=b'{"state": "idle"}' + b" " * BODY_MAX)
+    with pytest.raises(PCError):
+        await AmbientPlayerClient(hass, "192.0.2.5", 8097, "t").status()

@@ -1,12 +1,15 @@
 """Clients for the hardened media-PC daemons (ambient player and coordinator)."""
 from __future__ import annotations
 
+import json
 from urllib.parse import quote
 
 import aiohttp
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+from .library import read_capped
 
 _TIMEOUT = aiohttp.ClientTimeout(total=10)
 _PLAY_TIMEOUT = aiohttp.ClientTimeout(total=30)  # the player waits for HDMI and starts mpv before answering
@@ -38,14 +41,14 @@ class _PCClient:
                     msg = _REJECTED.get(resp.status, "Media PC request failed")
                     if resp.status == 409:
                         try:
-                            msg = str((await resp.json(content_type=None))["error"])
+                            msg = str(json.loads(await read_capped(resp))["error"])
                         except (ValueError, KeyError, TypeError):
                             pass
                     raise (PCAuthError if resp.status in (401, 403) else PCError)(msg)
-                return await resp.json(content_type=None) or {}
+                return json.loads(await read_capped(resp) or b"{}") or {}
         except (aiohttp.ClientError, TimeoutError) as err:
             raise PCError("Media PC is unreachable") from err
-        except ValueError as err:  # 2xx with a non-JSON body: not one of our daemons
+        except ValueError as err:  # 2xx with a non-JSON or oversized body: not one of our daemons
             raise PCError("Media PC request failed") from err
 
 

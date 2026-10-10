@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -37,6 +38,7 @@ from .const import (
     STATIC_URL,
     VIDEO_DIR,
 )
+from .library import read_capped
 from .store import HomeHubStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -431,7 +433,7 @@ class AmbienceManager:
                     OEMBED, params={"url": f"https://www.youtube.com/watch?v={vid}", "format": "json"},
                     timeout=aiohttp.ClientTimeout(total=OEMBED_SECS)) as resp:
                 resp.raise_for_status()
-                title = (await resp.json()).get("title")
+                title = json.loads(await read_capped(resp)).get("title")
         except (aiohttp.ClientError, TimeoutError, ValueError, AttributeError) as err:
             _LOGGER.debug("No YouTube title for %s: %s", vid, err)
             title = None
