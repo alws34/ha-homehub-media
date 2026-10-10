@@ -594,3 +594,8 @@ async def test_lounge_errors_never_log_the_token(hass, aioclient_mock, lounge, m
     assert "400" in caplog.text and "SECRET" not in caplog.text
     assert err.value.__cause__ is None  # no chained traceback with the request URL either
     await tv.stop_youtube("111299001912")
+
+
+async def test_rest_empty_answer_is_none(hass, aioclient_mock):
+    aioclient_mock.get(BASE + "111299001912", content=b"")
+    assert await tvmod.SamsungTV(hass, "192.0.2.1", "tok", None).app_info("111299001912") is None

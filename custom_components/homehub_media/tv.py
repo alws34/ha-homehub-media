@@ -183,7 +183,7 @@ class SamsungTV:
                     return None
                 if resp.status >= 400:
                     raise HomeAssistantError(f"TV returned HTTP {resp.status}")
-                return json.loads(await read_capped(resp)) if method == "GET" else True
+                return json.loads(await read_capped(resp) or b"null") if method == "GET" else True
         except (aiohttp.ClientError, TimeoutError, ValueError) as err:
             raise CannotConnect("TV is off or unreachable") from err
 
