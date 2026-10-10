@@ -27,7 +27,7 @@ Control a Samsung TV, run ambience (video, soundtrack and lights), and browse Pl
 - **Optional devices**: a streaming box on a TV input, an Ubuntu media PC for ambience and browser apps, and an ESP32 Bluetooth keyboard bridge.
 - **Voice assistant**: a conversation agent that uses Ollama, OpenAI, or Claude. You pick the provider and model. HomeHub's tools are also available to Home Assistant's own Ollama, OpenAI, and Anthropic agents.
 - **Blueprints** for stopping ambience when the TV changes, quiet hours, and sunset ambience.
-- **One card** (`homehub-media-card`) with no third-party card dependencies. It follows the light or dark theme.
+- **One card** (`homehub-media-card`) with no third-party card dependencies. It follows the light or dark theme. With a neumorphic theme that defines `--soft-surface` and the `--soft-shadow-*` tokens (such as Neumorphism), its buttons, D-pad and sliders are raised or recessed to match.
 
 ## Requirements
 

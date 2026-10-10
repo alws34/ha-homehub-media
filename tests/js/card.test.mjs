@@ -175,3 +175,11 @@ test("next video wraps, and starts from the first when the playing one is not in
   assert.equal(nextId(["a", "b", "c"], "c"), "a");
   assert.equal(nextId(["a", "b"], null), "a");
 });
+
+test("controls take their depth from a neumorphic theme's soft-* tokens, with flat fallbacks", () => {
+  for (const [token, fallback] of [["--soft-surface", "var(--hh-s1)"], ["--soft-shadow-small", "inset 0 0 0 1px var(--hh-line)"],
+                                   ["--soft-shadow-raised", "inset 0 0 0 1px var(--hh-line)"], ["--soft-shadow-inset", "none"]])
+    assert.ok(src.includes(`var(${token}, ${fallback})`), token);
+  assert.match(src, /\.dpad \{[^}]*box-shadow: var\(--hh-up-lg\)/);
+  assert.match(src, /\.ib \{[^}]*box-shadow: var\(--hh-up\)/);
+});
