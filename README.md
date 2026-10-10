@@ -149,7 +149,7 @@ To cap the output at 1080p, add `-vf "scale=-2:'min(1080,ih)'"` before `-c:v`.
 **Assign visuals and soundtracks to a mode**
 
 1. Open the **Ambience** tab in the card.
-2. Hold the mode's tile, or select the videos button on the large artwork at the top while that mode is shown there. Lights-only modes have no editor.
+2. Select the pencil on the mode's tile, hold the tile, or select the videos button on the large artwork at the top while that mode is shown there. Lights-only modes have no editor.
 3. When ambience plays on the media PC, browse visuals and soundtracks with the arrows or by swiping, and tap one to use it. Set the on, loop, and random-start options and the mix.
 4. Select **Save settings**.
 
@@ -173,7 +173,7 @@ The videos appear in the card's visual carousel in the order you entered them, w
 
 **Edit a mode's videos in the card** (admin users)
 
-1. On the **Ambience** tab, hold a mode's tile, or select the videos button on the large artwork at the top.
+1. On the **Ambience** tab, select the pencil on a mode's tile (or hold the tile), or select the videos button on the large artwork at the top.
 2. Each of the mode's videos shows its thumbnail. The play button plays that video on the TV now, the pencil opens its name and link for editing, and the cross removes it (select **Undo** in the message to bring it back).
 3. To add a video, paste its link into **Paste a YouTube link…** and select **Add** or press Enter. The name is the video's YouTube title (its video ID if YouTube cannot be reached); you can change it with the pencil.
 

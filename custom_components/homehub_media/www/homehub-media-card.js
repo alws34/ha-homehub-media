@@ -820,11 +820,11 @@ class HomeHubMediaCard extends HTMLElement {
         const on = a.mode === m.id;
         const n = m.lights_only ? 0 : modeIds(a.compositions?.[m.id]).length;
         const sub = on ? "Now playing" : m.lights_only ? "Lights only" : n ? `${n} video${n === 1 ? "" : "s"}` : "No videos";
-        return `<button class="tvp${on ? " on" : ""}" data-a="mode" data-v="${esc(m.id)}"${m.lights_only ? "" : ` data-hold="edit"`} aria-pressed="${on}"
+        return `<div class="tvw"><button class="tvp${on ? " on" : ""}" data-a="mode" data-v="${esc(m.id)}"${m.lights_only ? "" : ` data-hold="edit"`} aria-pressed="${on}"
             aria-label="Start ${esc(m.name)}${on ? ", playing" : ""}${m.lights_only ? "" : ". Hold to edit its videos"}">
             <span class="tva"><span class="ph">${icon(m.icon || "mdi:lightbulb-group")}</span>${n ? img(this._visual(modeIds(a.compositions[m.id])[0])?.preview) : ""}${on ? `<span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>` : ""}</span>
             <b>${esc(m.name)}</b><small>${esc(sub)}</small>
-          </button>`;
+          </button>${m.lights_only ? "" : `<button class="tvedit" data-a="edit" data-v="${esc(m.id)}" aria-label="Edit ${esc(m.name)}">${icon("mdi:pencil")}</button>`}</div>`;
       }).join("")}</div>
       ${vids.length ? `<h3 class="sh">${playing ? "Up next" : `In ${esc(fm.name)}`}</h3>
       <div class="tvrow sm">${vids.map((v) => {
@@ -1627,6 +1627,14 @@ h3.sh ha-icon { --mdc-icon-size: 16px; }
 .tvrow::-webkit-scrollbar { display: none; }
 .tvrow.sm { grid-auto-columns: 46%; }
 .tvrow { padding: 10px 10px 14px; margin: -10px -10px -8px; scroll-padding: 0 10px; }  /* room for the lifted tile's scale and glow */
+.tvw { position: relative; min-width: 0; scroll-snap-align: start; }
+.tvw .tvp { width: 100%; }
+.tvedit {
+  position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; color: #fff;
+  background: rgba(0, 0, 0, .45); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
+}
+.tvedit ha-icon { --mdc-icon-size: 17px; }
+.tvp.on ~ .tvedit { transform: translate(4px, -4px); }  /* follows the lifted tile */
 .tvp { display: grid; gap: 3px; min-width: 0; text-align: left; color: var(--hh-fg); scroll-snap-align: start; }
 .tvp:active:not(:disabled) { transform: scale(.97); }
 .tva {

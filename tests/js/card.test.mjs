@@ -198,3 +198,7 @@ test("mode tiles start on tap and open the video editor on hold; a video tile pl
   assert.match(src, /if \(el\.dataset\.hold === "edit"\) return this\._openEditor\(el\.dataset\.v\);/);
   assert.match(src, /case "vid": return this\._call\("ambience_start", \{ mode: b\.dataset\.m, video: v \}\);/);
 });
+
+test("mode tiles keep a pencil next to the tile (a sibling, so holding the tile still works)", () => {
+  assert.match(src, /<\/button>\$\{m\.lights_only \? "" : `<button class="tvedit" data-a="edit" data-v="\$\{esc\(m\.id\)\}"/);
+});
