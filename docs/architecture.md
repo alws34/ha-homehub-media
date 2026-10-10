@@ -19,6 +19,7 @@ www/ambience.html ── polls a signed state URL ──────────
                                                                                     ▼
 api.py            HA surfaces: websocket commands, services, HTTP views (thin: validate → hub → answer)
 entities          select / switch / sensor / conversation (thin: read hub state, call hub methods)
+assistant.py      LLM tools API (HubTool, HomeHubLLMAPI): validate the model's arguments → hub
 config_flow.py    pairing, reconfigure, reauth, options menu
         │
         ▼
@@ -30,7 +31,7 @@ hub.py            composition root + command routing + card snapshot
         ▼
 device clients    tv.py (Samsung WS 8002, REST 8001, DIAL 8080, YouTube Lounge, Wake-on-LAN)
                   library.py (Plex, Jellyfin, YouTube thumbnails, `read_capped`) · pc.py (media PC) · keyboard.py (ESP32)
-                  assistant.py (Ollama / OpenAI / Anthropic SDKs, LLM tools API)
+                  assistant.py (Ollama / OpenAI / Anthropic SDKs)
 pure helpers      catalog.py (scanning, link parsing, composition validation) · const.py (contracts)
 ```
 
@@ -38,6 +39,9 @@ pure helpers      catalog.py (scanning, link parsing, composition validation) ·
 
 1. **Dependencies point downward.** A device client never imports `hub`, `ambience`, `activity`, `api` or an
    entity platform. `catalog.py` and `const.py` import nothing from the package except each other.
+   `assistant.py` is the one module in two layers: its LLM tools API is a surface (like `api.py`, it finds the hub
+   with `hub.loaded_hub` at call time), and its SDK half imports nothing above it. Device clients may import
+   `library.read_capped`.
 2. **`hub.py` is the only composition root.** It builds every client and manager once per config entry and stores
    itself in `entry.runtime_data`. Nothing else constructs clients, except `config_flow.py`, which builds
    short-lived ones to probe a device before saving.
@@ -127,8 +131,10 @@ pure helpers      catalog.py (scanning, link parsing, composition validation) ·
   Never await a lock-holding call from inside another holder of the same lock (`asyncio.Lock` is not re-entrant).
 - **Activity**: requests use "mode: restart". A superseded caller returns `False` and must abort what it was about
   to do next.
-- **Background work**: long-lived tasks are created with `entry.async_create_background_task` and are cancelled
-  and awaited before lights are restored or the entry unloads.
+- **Background work**: long-lived tasks are created with `entry.async_create_background_task`, or with
+  `hass.async_create_background_task` when their owner cancels and awaits them itself (the flicker and PC fade in
+  `ambience._cancel`, the YouTube Lounge subscription in `tv._drop_lounge`). Either way they are cancelled and
+  awaited before lights are restored or the entry unloads.
 - **Device I/O**: every await on a device or remote service has a timeout. A hung device must never hold a lock
   forever.
 
