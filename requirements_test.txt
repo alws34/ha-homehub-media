@@ -1,8 +1,8 @@
-pytest-homeassistant-custom-component==0.13.367
-samsungtvws[async,encrypted]==3.0.5
-ruff==0.16.10
-home-assistant-frontend==20260826.7
+pytest-homeassistant-custom-component==0.13.375
+samsungtvws[async,encrypted]==3.0.7
+ruff==0.17.5
+home-assistant-frontend==20261028.6
 hassil==3.12.1
-home-assistant-intents==2026.8.28
-gazetteer-matcher==1.1.0
-pyytlounge==3.4.0
+home-assistant-intents==2026.10.27
+gazetteer-matcher==1.2.0
+pyytlounge==3.6.0
