@@ -36,6 +36,8 @@ Control a Samsung TV, run ambience (video, soundtrack and lights), and browse Pl
 - [HACS](https://hacs.xyz/).
 - A Samsung TV with Tizen OS on the same network as Home Assistant, reachable by IP address or host name.
 
+Tested only on the author's own TV, a Samsung running Tizen OS. Other TVs and OS versions may work, but they are untested.
+
 Optional: Plex, Jellyfin, a streaming box, a media PC, an ESP32 keyboard bridge, and an OpenAI or Claude API key (or a local Ollama server) for the voice assistant. To play Plex titles from the card, you also need the core Plex integration (see [TV limitations](#tv-limitations)).
 
 ## Installation
@@ -403,6 +405,8 @@ logger:
 ## Credits
 
 HomeHub Media is based on the original HomeHub Media Controller & Ambience bundle by the original HomeHub author.
+
+Inspired by [tur32005-rgb](https://github.com/tur32005-rgb).
 
 App logos: Simple Icons (CC0); trademarks belong to their owners.
 
