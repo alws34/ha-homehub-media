@@ -40,7 +40,9 @@ scanning; `release.yml` builds the release zip from a `v*` tag that matches `man
   `docs/architecture.md`.
 - **Translations**: config and options text, entities, services and selectors go in `translations/en.json`, with no
   URLs containing domains (hassfest).
-- **Versioning**: bump `manifest.json` `version` for every release users should install. HACS installs from `main`.
+- **Versioning**: bump `manifest.json` `version` for every release users should install, then push a matching `vX.Y.Z` tag. HACS
+  installs the release's `homehub_media.zip` (`zip_release` in `hacs.json`), so an untagged change on `main` reaches
+  no one.
 - **Git**:
   - run `git fetch` before starting work; more than one session has worked on this repo;
   - never force-push;

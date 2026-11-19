@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Only the **latest release** (and `main`, which HACS installs from) receives security fixes. Update through HACS,
+Only the **latest release** receives security fixes; HACS installs its `homehub_media.zip`. Update through HACS,
 then restart Home Assistant.
 
 ## Reporting a vulnerability
