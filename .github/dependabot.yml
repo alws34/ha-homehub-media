@@ -14,14 +14,22 @@ updates:
         applies-to: security-updates
         patterns: ["*"]
 
-  # requirements_test.txt: exact test pins. pytest-homeassistant-custom-component fixes the Home Assistant
-  # version, and hassil, home-assistant-intents and home-assistant-frontend must match that version, so all of
-  # them move in one PR and CI decides. The runtime requirements in manifest.json are not covered (Dependabot
-  # does not read it); keep them in step with Home Assistant core's pins by hand.
+  # requirements_test.txt: exact test pins. Dependabot only bumps the test tooling:
+  # pytest-homeassistant-custom-component (it fixes the Home Assistant version under test) and ruff.
+  # The others must equal what that Home Assistant release pins (homeassistant/package_constraints.txt and
+  # the frontend, conversation and samsungtv manifests), or manifest.json's own requirements, so they are
+  # updated by hand in the same commit as the pytest-homeassistant-custom-component bump.
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: monthly
+    ignore:
+      - dependency-name: home-assistant-frontend
+      - dependency-name: home-assistant-intents
+      - dependency-name: hassil
+      - dependency-name: gazetteer-matcher
+      - dependency-name: samsungtvws
+      - dependency-name: pyytlounge
     groups:
       python:
         patterns: ["*"]

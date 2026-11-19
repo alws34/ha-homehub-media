@@ -29,7 +29,9 @@ node --test 'tests/js/*.test.mjs'   # the card and the TV page
 ```
 
 Test requirements are pinned exactly in `requirements_test.txt`. `pytest-homeassistant-custom-component` fixes the
-Home Assistant version, so bump it together with `home-assistant-frontend`, `hassil` and `home-assistant-intents`.
+Home Assistant version, so when it is bumped, set `home-assistant-frontend`, `home-assistant-intents`, `hassil`,
+`gazetteer-matcher` and `samsungtvws` to what that Home Assistant release pins, and keep `pyytlounge` equal to
+`manifest.json`. Dependabot only proposes `pytest-homeassistant-custom-component` and `ruff`.
 
 ## Releases
 
