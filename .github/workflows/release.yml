@@ -1,0 +1,71 @@
+# Tag push (v1.2.3, matching manifest.json) -> GitHub release with homehub_media.zip, the
+# integration folder's contents at the zip root as HACS expects for zip_release, plus a
+# SHA-256 file and a build-provenance attestation. CI (ci.yml) runs on the same tag push.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and attest the release zip
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write # Sigstore signing of the provenance attestation
+      attestations: write # store the attestation on GitHub
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the tag matches manifest.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(jq -r .version custom_components/homehub_media/manifest.json)"
+          if [ "v${version}" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match manifest.json version $version"
+            exit 1
+          fi
+
+      - name: Build homehub_media.zip
+        # git archive of the committed tree only: no caches or untracked files
+        run: |
+          mkdir dist
+          git archive --format=zip -o dist/homehub_media.zip "${GITHUB_SHA}:custom_components/homehub_media"
+          (cd dist && sha256sum homehub_media.zip > homehub_media.zip.sha256 && cat homehub_media.zip.sha256)
+          unzip -l dist/homehub_media.zip
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/homehub_media.zip
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the release and upload its assets
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes dist/*
