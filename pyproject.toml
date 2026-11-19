@@ -14,3 +14,8 @@ ignore = ["ASYNC109"]  # `timeout` parameters here are aiohttp ClientTimeouts, n
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "B905", "ASYNC110", "ASYNC240"]  # asserts, fake tokens, polling helpers in tests
 "media-pc/tests/*" = ["S"]
+
+[tool.coverage.run]
+source = ["custom_components/homehub_media", "media-pc"]
+omit = ["media-pc/tests/*"]
+relative_files = true  # repo-relative paths in coverage.xml, as SonarQube Cloud expects
