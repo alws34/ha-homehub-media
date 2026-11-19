@@ -23,6 +23,17 @@ async def test_tv_library_secrets_not_logged(hass, setup_entry, caplog):
     assert caplog.messages == ["Connection closed."]
 
 
+async def test_websockets_frames_and_url_with_the_tv_token_not_logged(hass, setup_entry, caplog):
+    log = logging.getLogger("websockets.client")  # what samsungtvws' connection logs through, at debug
+    with caplog.at_level(logging.DEBUG, "websockets"):
+        log.debug("> GET %s HTTP/1.1", "/api/v2/channels/samsung.remote.control?name=SG9tZUh1Yg==&token=123")
+        # a typed-text frame, cut at 75 characters before "SendInputString": the base64 text would still show
+        log.debug("> %s", """TEXT '{"method": "ms.remote.control", "params": {"Cmd": "aHVudGVyMg==", "Da...' [150 bytes]""")
+        log.debug("< %s", """TEXT '{"data": {"clients": [], "id": "x", "token": "123"}, "event": "ms.chann...' [90 bytes]""")
+        log.debug("= connection is %s", "OPEN")
+    assert caplog.messages == ["= connection is OPEN"]
+
+
 async def test_youtube_lounge_secrets_not_logged(hass, setup_entry, caplog):
     log = logging.getLogger("pyytlounge")  # the logger tv.py hands to YtLoungeApi
     with caplog.at_level(logging.DEBUG, "pyytlounge"):

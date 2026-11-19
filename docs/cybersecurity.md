@@ -65,8 +65,9 @@ The secrets are:
   `entry.options`.
 
 1. **Never log a secret.**
-   - Pass any third-party logger that can see one (samsungtvws, pyytlounge) through the redacting log filter in
-     `__init__.py`.
+   - Pass any third-party logger that can see one (samsungtvws, pyytlounge, and websockets under samsungtvws)
+     through the redacting log filter in `__init__.py`. The websockets filter also drops records with the token or
+     a TV remote frame from other integrations that use websockets; that only removes debug lines.
    - Exception messages that reach the UI or the log must not include URLs with credentials, headers or raw error
      bodies from authenticated endpoints.
 2. **Never send a secret to the frontend.**

@@ -26,18 +26,23 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SELECT, Platform.SWITCH, Platform.SENSOR]
 _SECRET_RE = re.compile("token|lounge|screen|SendInputString|metaTag", re.IGNORECASE)
-_FILTERED = ("samsungtvws", "pyytlounge")  # third-party loggers that see secrets
+# websockets (under samsungtvws) logs the TV URL with the token and every frame cut to 75 characters, so a typed
+# text frame shows its base64 text but not "SendInputString": drop every TV remote frame from it
+_WS_SECRET_RE = re.compile(r"token|ms\.remote\.control", re.IGNORECASE)
+_FILTERED = ("samsungtvws", "pyytlounge", "websockets")  # third-party loggers that see secrets
+_LAZY = ("websockets.client",)  # created on the first connection, after async_setup: named up front
 
 
 def _no_secrets(record: logging.LogRecord) -> bool:
-    """Drops samsungtvws records with the TV token, typed text or the signed page URL, and pyytlounge records with
-    the lounge token or screen id. pyytlounge tracebacks (request URLs with the token) are stripped."""
+    """Drops samsungtvws records with the TV token, typed text or the signed page URL, websockets records with the
+    TV token or a TV remote frame, and pyytlounge records with the lounge token or screen id. pyytlounge tracebacks
+    (request URLs with the token) are stripped."""
     if record.name.startswith("pyytlounge"):
         record.exc_info = record.exc_text = record.stack_info = None
     text = record.getMessage()
     if record.exc_info:  # samsungtvws: a traceback can carry the WS URL with the token
         text += logging.Formatter().formatException(record.exc_info)
-    return not _SECRET_RE.search(text)
+    return not (_WS_SECRET_RE if record.name.startswith("websockets") else _SECRET_RE).search(text)
 
 
 def _platforms(hub: Hub) -> list[Platform]:
@@ -46,7 +51,8 @@ def _platforms(hub: Hub) -> list[Platform]:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     # a logger's filters skip its children's records, so each module logger gets it (tv.py imported them all)
-    for name in {*_FILTERED, *(n for n in list(logging.root.manager.loggerDict) if n.split(".")[0] in _FILTERED)}:
+    for name in {*_FILTERED, *_LAZY,
+                 *(n for n in list(logging.root.manager.loggerDict) if n.split(".")[0] in _FILTERED)}:
         logging.getLogger(name).addFilter(_no_secrets)  # a no-op when already added
     api.async_register(hass)
     await hass.http.async_register_static_paths(
