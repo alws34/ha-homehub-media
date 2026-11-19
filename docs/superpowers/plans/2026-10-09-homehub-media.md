@@ -25,7 +25,7 @@
 - HTTP from HA: `async_get_clientsession(hass)`; every request has `timeout=aiohttp.ClientTimeout(total=10)` (pairing: 31).
 - Never log tokens/API keys. Never return raw server errors to the frontend.
 - Raise `ServiceValidationError` for bad user input, `HomeAssistantError` for device/network failures.
-- Commit after every green step: `git commit -m "<type>(<scope>): <what>"` and end the message with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Commit after every green step: `git commit -m "<type>(<scope>): <what>"`, with no co-author trailers.
 
 ## File map
 
