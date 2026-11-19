@@ -1,0 +1,30 @@
+version: 2
+# Monthly version updates, one grouped PR per ecosystem, against the default branch (main).
+# Security fixes open as soon as an alert does.
+updates:
+  # SHA-pinned actions in .github/workflows (the comment after each SHA is kept up to date).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # requirements_test.txt: exact test pins. pytest-homeassistant-custom-component fixes the Home Assistant
+  # version, and hassil, home-assistant-intents and home-assistant-frontend must match that version, so all of
+  # them move in one PR and CI decides. The runtime requirements in manifest.json are not covered (Dependabot
+  # does not read it); keep them in step with Home Assistant core's pins by hand.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
