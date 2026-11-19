@@ -128,10 +128,14 @@ def _sdk_errors() -> tuple[type[Exception], ...]:
 
 @contextmanager
 def _api_errors() -> Iterator[None]:
-    """Network/SDK failures -> HomeAssistantError("invalid_auth"|"cannot_connect"); raw errors never leak."""
+    """Network/SDK failures -> HomeAssistantError("invalid_auth"|"cannot_connect"); raw errors never leak.
+
+    Also a missing SDK (its install at setup failed, e.g. PyPI unreachable) and a malformed reply (an
+    OpenAI-compatible server with no choices, Ollama tags that are not an object): never an unhandled error."""
     try:
         yield
-    except (aiohttp.ClientError, TimeoutError, ValueError, *_sdk_errors()) as err:  # ValueError: bad or huge JSON
+    except (aiohttp.ClientError, TimeoutError, ValueError, ImportError, LookupError, TypeError, AttributeError,
+            *_sdk_errors()) as err:  # ValueError: bad or huge JSON
         status = getattr(err, "status_code", None) or getattr(err, "status", None)
         raise HomeAssistantError("invalid_auth" if status in (401, 403) else "cannot_connect") from err
 

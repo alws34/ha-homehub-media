@@ -189,3 +189,23 @@ async def test_list_models_ollama_answer_is_size_capped(hass, aioclient_mock):
     aioclient_mock.get("http://o:11434/api/tags", content=b'{"models": []}' + b" " * BODY_MAX)
     with pytest.raises(HomeAssistantError, match="cannot_connect"):
         await a.list_models(hass, "ollama", "http://o:11434", None)
+
+
+async def test_missing_sdk_and_malformed_replies_are_cannot_connect(hass, monkeypatch, aioclient_mock):
+    def missing(cfg):
+        raise ModuleNotFoundError("No module named 'openai'")  # the install at setup failed
+    monkeypatch.setattr(a, "_sdk_client", missing)
+    cfg = {"provider": "openai", "api_key": "k", "model": "m"}
+    with pytest.raises(HomeAssistantError, match="cannot_connect"):
+        await a.complete(hass, cfg, "s", [{"role": "user", "content": "x"}], [])
+    async def no_choices(**kw):
+        return SimpleNamespace(choices=[])  # an OpenAI-compatible server answering nothing
+    monkeypatch.setattr(a, "_sdk_client", lambda cfg: SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=no_choices))))
+    with pytest.raises(HomeAssistantError, match="cannot_connect"):
+        await a.complete(hass, cfg, "s", [{"role": "user", "content": "x"}], [])
+    for body in ([], {"models": [{"id": "no name"}]}, {"models": None}):
+        aioclient_mock.clear_requests()
+        aioclient_mock.get("http://o:11434/api/tags", json=body)
+        with pytest.raises(HomeAssistantError, match="cannot_connect"):
+            await a.list_models(hass, "ollama", "http://o:11434", None)
