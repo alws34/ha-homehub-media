@@ -25,8 +25,9 @@ say why. For security rules, add an entry to "Accepted risks".
 node --test 'tests/js/*.test.mjs'      # card and TV page tests (the glob is needed on Node 24)
 ```
 
-CI (`.github/workflows/validate.yml`) runs HACS validation, hassfest, ruff, pytest and the node tests on every
-push.
+CI runs on every push: `validate.yml` (HACS validation, hassfest) and `ci.yml` (ruff, pytest with coverage, the
+node tests, and SonarQube Cloud once the `SONAR_TOKEN` secret exists). `codeql.yml` and `scorecard.yml` add code
+scanning; `release.yml` builds the release zip from a `v*` tag that matches `manifest.json`.
 
 ## Working rules
 

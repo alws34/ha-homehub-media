@@ -189,7 +189,14 @@ The secrets are:
 - **Runtime requirements** in `manifest.json` have lower bounds or exact pins. Test requirements are pinned exactly in
   `requirements_test.txt`.
 - **GitHub Actions** are pinned to a full commit SHA, with the branch or tag in a comment.
-- **CI runs** HACS validation, hassfest, ruff, the Python tests and the card tests on every push.
+- **CI runs** HACS validation, hassfest, ruff (with the bandit, bugbear and async rules), the Python tests with
+  coverage and the card tests on every push. CodeQL (Python, JavaScript, Actions) and OpenSSF Scorecard upload to
+  code scanning; SonarQube Cloud runs when its token is set.
+- **Workflow permissions** default to `contents: read`; a job that needs more asks for it. Checkouts do not persist
+  credentials, and no workflow uses `pull_request_target`.
+- **Dependabot** proposes updates for the pinned actions and the test requirements (`.github/dependabot.yml`).
+- **Releases** come from a `v*` tag that must match `manifest.json`; the zip HACS can install carries a SHA-256 and
+  a GitHub build-provenance attestation.
 - **Before every push**, scan the diff for secrets and real LAN addresses.
 
 ## 11. Review checklist

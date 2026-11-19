@@ -3,6 +3,9 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![Latest release](https://img.shields.io/github/v/release/alws34/ha-homehub-media)](https://github.com/alws34/ha-homehub-media/releases)
 [![Validate](https://github.com/alws34/ha-homehub-media/actions/workflows/validate.yml/badge.svg)](https://github.com/alws34/ha-homehub-media/actions/workflows/validate.yml)
+[![CI](https://github.com/alws34/ha-homehub-media/actions/workflows/ci.yml/badge.svg)](https://github.com/alws34/ha-homehub-media/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/alws34/ha-homehub-media/actions/workflows/codeql.yml/badge.svg)](https://github.com/alws34/ha-homehub-media/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/alws34/ha-homehub-media/badge)](https://scorecard.dev/viewer/?uri=github.com/alws34/ha-homehub-media)
 [![License: MIT](https://img.shields.io/github/license/alws34/ha-homehub-media)](LICENSE)
 
 Control a Samsung TV, run ambience (video, soundtrack and lights), and browse Plex and Jellyfin from Home Assistant, with one Lovelace card.
@@ -380,6 +383,7 @@ HomeHub Media replaces the HomeHub Media Controller & Ambience bundle (YAML pack
 - **ESP32 keyboard bridge**: HomeHub sends the shared key in clear text over plain HTTP, so anyone who can capture your LAN traffic can read it and type on the bridge. Your bridge firmware should compare the key in constant time, accept requests only from the Home Assistant IP address, and ideally require signed timestamps so a captured request cannot be replayed. Put the bridge on a dedicated IoT VLAN or SSID that only Home Assistant can reach.
 - The media PC requests (including the bearer tokens) also use plain HTTP, and so do Plex and Jellyfin requests when the server URL starts with `http://`. Anyone who can capture traffic on your LAN can read these values. Keep the network trusted, or put these devices on a separate network segment that only Home Assistant can reach.
 - Keys and tokens are stored in Home Assistant's configuration. Anyone with access to the Home Assistant config folder can read them.
+- To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue.
 
 ## Troubleshooting
 
@@ -401,6 +405,10 @@ logger:
   logs:
     custom_components.homehub_media: debug
 ```
+
+## Contributing
+
+Issues and pull requests are welcome, especially reports from other Samsung TV models. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Credits
 
