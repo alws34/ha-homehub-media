@@ -44,6 +44,7 @@ KEY_RE = re.compile(r"KEY_[A-Z0-9_]{1,32}")
 APP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 REST_TIMEOUT = aiohttp.ClientTimeout(total=5)  # REST (8001) and DIAL (8080)
 WS_SEND_SECS = 15  # one WebSocket send; a held key waits up to 10 s inside it
+WS_CLOSE_SECS = 5  # closing a dead or hung WebSocket
 WS_ERRORS = (ConnectionFailure, WebSocketException, OSError)
 URL_VISIBLE_SECS = 5  # wait for the browser to come to the front after a URL launch
 YT_ORIGIN = "package:com.google.android.youtube"  # without it the TV's DIAL server answers 403
@@ -166,12 +167,21 @@ class SamsungTV:
                 async with asyncio.timeout(WS_SEND_SECS):  # a hung TV must not hold the lock
                     await self._remote.send_commands(list(commands))
             except WS_ERRORS as err:
-                self._remote = None
+                await self._discard()
                 self._set_flag("available", False)
                 if isinstance(err, UnauthorizedError):
                     raise PairingDenied("The TV refused the token, pair again") from err
                 raise CannotConnect("TV is off or unreachable") from err
         self._set_flag("available", True)
+
+    async def _discard(self) -> None:
+        """Forget the WebSocket and close it, bounded: a timed-out send must not leave a socket (and its receive
+        task) open on the TV, which counts every open one as another client."""
+        if remote := self._remote:
+            self._remote = None
+            with contextlib.suppress(*WS_ERRORS):  # incl. TimeoutError
+                async with asyncio.timeout(WS_CLOSE_SECS):
+                    await remote.close()
 
     async def _rest(self, method: str, path: str = "") -> Any:
         """None on 404; parsed JSON for GET, True for other methods."""
@@ -440,6 +450,4 @@ class SamsungTV:
         async with self._yt_lock:  # unload: no lounge subscription task outlives the entry
             self._yt_video = None
             await self._drop_lounge()
-        if remote := self._remote:
-            self._remote = None
-            await remote.close()
+        await self._discard()

@@ -578,6 +578,24 @@ async def test_a_hung_websocket_send_does_not_hold_the_lock(hass, fake_remote, m
     assert not tv._lock.locked() and not tv.available
 
 
+async def test_a_failed_send_closes_the_socket_even_when_close_hangs(hass, fake_remote, monkeypatch):
+    # the TV counts every open socket as a client: a timed-out one is closed, not just forgotten
+    monkeypatch.setattr(tvmod, "WS_SEND_SECS", 0.01)
+    monkeypatch.setattr(tvmod, "WS_CLOSE_SECS", 0.01)
+    tv = tvmod.SamsungTV(hass, "192.0.2.1", "tok", None)
+    await tv.send_key("KEY_HOME")
+    old, closed = fake_remote["r"], []
+    async def hang(cmds, key_press_delay=None): await asyncio.Event().wait()
+    async def close(): closed.append(True); await asyncio.Event().wait()  # a hung TV: close never returns
+    old.send_commands, old.close = hang, close
+    async with asyncio.timeout(5):
+        with pytest.raises(tvmod.CannotConnect):
+            await tv.send_key("KEY_HOME")
+    assert closed and tv._remote is None and not tv._lock.locked()
+    await tv.send_key("KEY_HOME")  # the next command opens a new socket
+    assert fake_remote["r"] is not old and fake_remote["r"].sent
+
+
 async def test_lounge_errors_never_log_the_token(hass, aioclient_mock, lounge, monkeypatch, caplog):
     url = URL("https://www.youtube.com/api/lounge/bc/bind?loungeIdToken=SECRET")
     info = aiohttp.RequestInfo(url, "POST", CIMultiDictProxy(CIMultiDict()), url)
