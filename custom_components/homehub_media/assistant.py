@@ -36,6 +36,8 @@ CLAUDE_MODEL = "claude-opus-5-5"
 REQ = {"openai": "openai>=2.45.0", "ollama": "openai>=2.45.0", "claude": "anthropic>=0.108.0"}
 REFUSAL = "Sorry, I can't help with that."
 TITLE_MAX = 100
+# HA 2026.10+ wants tools to return a ToolResult (a plain dict logs a deprecation, removed in 2027.11); 2026.9 has none
+TOOL_RESULT = getattr(llm, "ToolResult", None)
 PROMPT = ("You control the living-room TV, its streaming apps and the room ambience (lights, visuals, sound) "
           "with the HomeHub Media tools. Replies are spoken aloud, so keep them to one short sentence.")
 
@@ -43,15 +45,18 @@ PROMPT = ("You control the living-room TV, its streaming apps and the room ambie
 class HubTool(llm.Tool):
     """Validates the model's arguments, then calls the Hub."""
 
+    integration = DOMAIN  # HA 2026.10+ reports a tool that does not name its integration (required in 2027.10)
+
     def __init__(self, name: str, description: str, schema: dict, run: Callable[..., Awaitable[Any]]) -> None:
         self.name, self.description, self.parameters, self._run = name, description, vol.Schema(schema), run
 
     async def async_call(self, hass: HomeAssistant, tool_input: llm.ToolInput,
-                         llm_context: llm.LLMContext) -> JsonObjectType:
+                         llm_context: llm.LLMContext) -> Any:
         args = self.parameters(tool_input.tool_args)  # HA 2026.9 does not validate; model output is untrusted
         if not (hub := loaded_hub(hass)):
             raise HomeAssistantError("HomeHub Media is not loaded")
-        return await hub.command(self._run(hub, **args)) or {"success": True}  # voice is user activity
+        data: JsonObjectType = await hub.command(self._run(hub, **args)) or {"success": True}  # voice = user activity
+        return TOOL_RESULT(data=data) if TOOL_RESULT else data
 
 
 def _clean(text: str) -> str:

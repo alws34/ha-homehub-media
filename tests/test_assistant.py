@@ -78,7 +78,9 @@ async def test_tool_validates_and_calls_hub(hass):
     entry.runtime_data = hub
     inst = await api.async_get_api_instance(ctx)
     assert "dinner (Dinner)" in inst.api_prompt
-    assert await inst.async_call_tool(call) == {"success": True}
+    result = await inst.async_call_tool(call)  # a ToolResult on HA 2026.10+, the dict itself on 2026.9
+    assert getattr(result, "data", result) == {"success": True} and not getattr(result, "error", False)
+    assert all(t.integration == DOMAIN for t in inst.tools)  # HA 2026.10+ reports untagged tools
     hub.ambience.start.assert_awaited_once_with("dinner")
     assert hub.last_command > 0  # voice counts as user activity
     for bad in ("../etc", "dinner\n", "reading"):  # model output is untrusted; only configured modes

@@ -32,7 +32,9 @@ def _messages(content: list[conversation.Content]) -> list[dict]:
             out.append({"role": "assistant", "content": c.content,
                         "tool_calls": [(t.id, t.tool_name, t.tool_args) for t in c.tool_calls or []]})
         elif isinstance(c, conversation.ToolResultContent):
-            out.append({"role": "tool", "tool_call_id": c.tool_call_id, "content": json_dumps(c.tool_result)})
+            # HA 2026.10+: `result` (a ToolResult); `tool_result` is a deprecated shim there, the only field in 2026.9
+            data = c.result.data if hasattr(c, "result") else c.tool_result
+            out.append({"role": "tool", "tool_call_id": c.tool_call_id, "content": json_dumps(data)})
     return out
 
 
