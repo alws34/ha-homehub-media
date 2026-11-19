@@ -725,7 +725,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(body.decode("utf-8")) if body else {}
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise CoordinatorError(f"{name} request is invalid")
+            raise CoordinatorError(f"{name} request is invalid") from None
         if not isinstance(payload, dict):
             raise CoordinatorError(f"{name} request is invalid")
         return payload

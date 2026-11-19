@@ -388,7 +388,7 @@ class HomeHubOptionsFlow(OptionsFlowWithReload):
             if not _url_ok(url):
                 errors["url"] = "invalid_url"
             elif not token:
-                errors["token"] = "secret_required"
+                errors["token"] = "secret_required"  # noqa: S105 - an error key, not a password
             else:
                 _, err = await _probe(library.PlexServer(self.hass, url, token, None).continue_watching())
                 if not err:

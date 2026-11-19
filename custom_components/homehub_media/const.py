@@ -10,7 +10,7 @@ SIGNAL_UPDATE = f"{DOMAIN}_update"
 # config entry data
 CONF_HOST = "host"
 CONF_MAC = "mac"
-CONF_TOKEN = "token"
+CONF_TOKEN = "token"  # noqa: S105 - a config key name
 CONF_PORT = "port"  # 8002 (wss) default
 CONF_YOUTUBE = "youtube_lounge"  # YouTube lounge auth (pyytlounge AuthState.serialize()), paired on first use
 CLIENT_NAME = "HomeHub"

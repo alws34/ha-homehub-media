@@ -61,7 +61,7 @@ class PlayerError(RuntimeError):
 
 
 def run_checked(args: list[str], timeout: float = 20.0) -> str:
-    completed = subprocess.run(
+    completed = subprocess.run(  # noqa: S603 - an argv list from code, never a shell
         args,
         check=False,
         text=True,
@@ -752,7 +752,7 @@ class DualAmbientPlayer:
     ) -> None:
         layer = self.layers[kind]
         self._stop_layer_locked(layer)
-        assert layer.ipc_path is not None
+        assert layer.ipc_path is not None  # noqa: S101 - type narrowing; set in __init__
         layer.ipc_path.unlink(missing_ok=True)
         if item.source_type == "stream":
             loop = False
@@ -761,7 +761,7 @@ class DualAmbientPlayer:
         command = self._mpv_command(
             kind, item, loop, offset, volume, layer.ipc_path
         )
-        layer.process = subprocess.Popen(
+        layer.process = subprocess.Popen(  # noqa: S603 - absolute mpv path and validated args, no shell
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

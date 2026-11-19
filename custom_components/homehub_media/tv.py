@@ -419,7 +419,7 @@ class SamsungTV:
             return None
 
         found = await asyncio.gather(*(first_installed(app["ids"]) for app in APP_CATALOG.values()))
-        apps = {key: app_id for key, app_id in zip(APP_CATALOG, found) if app_id}
+        apps = {key: app_id for key, app_id in zip(APP_CATALOG, found, strict=True) if app_id}
         self.browser_id = apps.get("browser", self.browser_id)
         return apps
 

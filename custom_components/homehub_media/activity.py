@@ -150,7 +150,7 @@ class ActivityManager:
     @staticmethod
     async def _until(check, secs: float) -> bool:
         end = time.monotonic() + secs
-        while not (ok := check()) and time.monotonic() < end:
+        while not (ok := check()) and time.monotonic() < end:  # noqa: ASYNC110 - polls another entity's state
             await asyncio.sleep(min(0.2, secs))
         return ok
 

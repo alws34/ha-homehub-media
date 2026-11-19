@@ -233,7 +233,7 @@ class AmbienceManager:
         if comp["visuals"] and (shuffle or comp["visual"] is None):
             known = {i["id"] for i in self._catalog["visuals"]}
             pool = [v for v in comp["visuals"] if v in known]
-            visual = random.choice(pool) if pool else comp["visual"]
+            visual = random.choice(pool) if pool else comp["visual"]  # noqa: S311 - a shuffle, not a secret
             comp = {**comp, "visual": visual, "visual_enabled": comp["visual_enabled"] and visual is not None}
         return comp
 
@@ -461,10 +461,10 @@ class AmbienceManager:
         files = {v["id"] for v in self._catalog["visuals"] if v["source_type"] != "youtube"}
         try:
             drop = self._used(mode_id) - {i for m in self.modes() if m["id"] != mode_id for i in self._used(m["id"])}
-            keep = {name: url for (name, url), item in zip(merged.items(), cat.youtube_items(merged, files))
+            keep = {name: url for (name, url), item in zip(merged.items(), cat.youtube_items(merged, files), strict=True)
                     if name in new or item["id"] not in drop}
             # ponytail: a drop can shift a later same-slug video's id (rain_2 -> rain); persist ids if that bites
-            ids = dict(zip(keep, (i["id"] for i in cat.youtube_items(keep, files))))
+            ids = dict(zip(keep, (i["id"] for i in cat.youtube_items(keep, files)), strict=True))
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
         self._hub.options[OPT_AMBIENCE] = amb = {**amb, "youtube": keep}
